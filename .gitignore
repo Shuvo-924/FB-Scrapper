@@ -1,3 +1,5 @@
 .venv
 output
 storage_state.json
+facebook_profile
+auth_temp

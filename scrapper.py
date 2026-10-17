@@ -1,7 +1,9 @@
-import csv
+import argparse
 import datetime
 import json
+import os
 import re
+import sys
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -9,20 +11,18 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import pandas as pd
 from playwright.sync_api import sync_playwright
 
-PAGE_URL = "https://www.facebook.com/KalniBR"
-
-# Any of these keywords can be present for a valid post
-KEYWORDS = ["ঢাকা", "সিলেট", "কমলাপুর"]
-
-MAX_SCROLLS = 500
-SCROLL_WAIT_MS = 2000
+PAGE_URL = os.getenv("PAGE_URL", "https://www.facebook.com/KalniBR")
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "500"))
+SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "2500"))
+KEYWORDS_ENV = os.getenv("KEYWORDS", "ঢাকা,সিলেট,কমলাপুর")
+KEYWORDS = [k.strip() for k in KEYWORDS_ENV.split(",") if k.strip()]
 
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 IGNORE_TOOLTIPS = {
-    "marketplace", "home", "video", "friends", "groups", 
-    "gaming", "menu", "notifications", "account", "reels", 
+    "marketplace", "home", "video", "friends", "groups",
+    "gaming", "menu", "notifications", "account", "reels",
     "facebook", "watch", "messages", "see your profile"
 }
 
@@ -39,7 +39,6 @@ def clean_text(text: str) -> str:
 
 
 def clean_facebook_url(url: str) -> str:
-    """Strips tracking query parameters (__cft__, __tn__, comment_id)."""
     if not url:
         return ""
     parsed = urlparse(url)
@@ -53,7 +52,6 @@ def clean_facebook_url(url: str) -> str:
 
 
 def is_valid_timestamp_tooltip(text: str) -> bool:
-    """Ensures tooltip is a real date/time and not a menu item."""
     if not text:
         return False
     lower = text.strip().lower()
@@ -65,15 +63,6 @@ def is_valid_timestamp_tooltip(text: str) -> bool:
 
 
 def get_post_permalink(card) -> str:
-    """
-    Extracts the canonical link for ALL post types:
-    - Standard posts (/posts/)
-    - Videos (/videos/, /watch?v=)
-    - Reels (/reel/)
-    - Photos (/photo/, /photos/)
-    - Permalinks (story_fbid, fbid, /permalink/)
-    """
-    # 1. Broad selector checking all Facebook content formats
     candidate_links = card.locator(
         'a[href*="/posts/"], '
         'a[href*="/videos/"], '
@@ -90,17 +79,13 @@ def get_post_permalink(card) -> str:
             raw_href = candidate_links.nth(i).get_attribute("href") or ""
             parsed = urlparse(raw_href)
 
-            # Match valid post permalink paths
             if any(marker in parsed.path for marker in ["/posts/", "/videos/", "/watch", "/reel/", "/photo", "/permalink/"]):
                 return clean_facebook_url(urljoin("https://www.facebook.com", raw_href))
-            
-            # Match query-based permalinks (e.g. ?story_fbid=... or ?fbid=...)
             if any(param in parsed.query for param in ["story_fbid", "fbid", "v="]):
                 return clean_facebook_url(urljoin("https://www.facebook.com", raw_href))
         except Exception:
             continue
 
-    # 2. Fallback: Check the header timestamp anchor directly
     header_time_link = card.locator(
         'div[data-ad-rendering-role="profile_name"] ~ div a[role="link"], '
         'a[target="_blank"]:has(svg)'
@@ -116,8 +101,27 @@ def get_post_permalink(card) -> str:
     return ""
 
 
+def dismiss_login_banner(page):
+    """Dismisses Facebook's intrusive unauthenticated banners/overlays."""
+    close_selectors = [
+        'div[role="dialog"] div[aria-label="Close"]',
+        'div[role="banner"] div[aria-label="Close"]',
+        'div[aria-label="Decline optional cookies"]',
+        'div[aria-label="Allow all cookies"]',
+        'div[role="button"]:has-text("Not now")',
+        'div[role="button"]:has-text("এখন নয়")'
+    ]
+    for selector in close_selectors:
+        try:
+            btn = page.locator(selector).first
+            if btn.is_visible(timeout=1000):
+                btn.click()
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+
 def get_feed_cards(page):
-    """Modern Facebook Page post container selectors."""
     selectors = [
         'div[role="feed"] > div:has(div[data-ad-preview="message"])',
         'div[role="feed"] > div:has(div[data-ad-rendering-role="story_message"])',
@@ -133,20 +137,14 @@ def get_feed_cards(page):
 
 
 def scrape_post_timestamp_from_url(context, post_url: str) -> str:
-    """
-    Opens the post in a dedicated tab, waits for React hydration,
-    and hovers directly over the timestamp link to read the tooltip.
-    """
     if not post_url:
         return ""
 
     post_page = None
     try:
         post_page = context.new_page()
-        # Navigate and wait for DOM
-        post_page.goto(post_url, wait_until="domcontentloaded", timeout=20000)
+        post_page.goto(post_url, wait_until="domcontentloaded", timeout=25000)
 
-        # Wait for the post header/main content to mount (allow React hydration)
         try:
             post_page.wait_for_selector(
                 '[data-ad-rendering-role="profile_name"], h2, div[role="main"]',
@@ -155,11 +153,8 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
         except Exception:
             pass
 
-        # Give React another moment to bind event listeners
-        post_page.wait_for_timeout(1500)
+        post_page.wait_for_timeout(1200)
 
-        # In dedicated post view, find candidate timestamp anchors
-        # The timestamp link is immediately below/next to the author name
         timestamp_selectors = [
             'div[data-ad-rendering-role="profile_name"] ~ div a[role="link"]',
             'h2 ~ div a[role="link"]',
@@ -182,23 +177,17 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
 
         exact_date = ""
 
-        # Method 1: Hover over the found timestamp link
         if target:
-            # Scroll gently into middle view
             target.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'center' })")
-            post_page.wait_for_timeout(400)
-
+            post_page.wait_for_timeout(300)
             box = target.bounding_box()
             if box:
-                # Hover at the center of the timestamp
                 post_page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
             else:
                 target.hover(force=True, timeout=2000)
 
-            # Wait for Facebook's 500ms hover delay
             post_page.wait_for_timeout(1200)
 
-            # Read the tooltip
             tooltips = post_page.locator('div[role="tooltip"]')
             for idx in range(tooltips.count()):
                 t_val = tooltips.nth(idx).inner_text().strip()
@@ -206,7 +195,6 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
                     exact_date = t_val
                     break
 
-        # Method 2 (Fallback): Extract creation_time from Facebook's embedded JSON
         if not exact_date:
             html = post_page.content()
             match = re.search(r'"(?:creation_time|publish_time)":\s*(\d{10})', html)
@@ -218,7 +206,7 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
         return exact_date
 
     except Exception as e:
-        print(f"    [!] Error during timestamp extraction: {e}")
+        print(f"    [!] Timestamp parse error: {e}")
         return ""
     finally:
         if post_page:
@@ -228,28 +216,71 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
                 pass
 
 
+def save_data(collected_posts: dict):
+    if not collected_posts:
+        return
+    df = pd.DataFrame(list(collected_posts.values()))
+    json_path = OUTPUT_DIR / "posts.json"
+    csv_path = OUTPUT_DIR / "posts.csv"
+    df.to_json(json_path, orient="records", force_ascii=False, indent=2)
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+
 def main():
     collected_posts = {}
+    is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+    headless = True if is_ci else os.getenv("HEADLESS", "false").lower() == "true"
+
+    # Load existing posts if resuming an earlier artifact
+    existing_json = OUTPUT_DIR / "posts.json"
+    if existing_json.exists():
+        try:
+            with open(existing_json, "r", encoding="utf-8") as f:
+                prev_data = json.load(f)
+                for item in prev_data:
+                    sig = item.get("url") or item.get("text", "")[:100]
+                    collected_posts[sig] = item
+            print(f"[+] Loaded {len(collected_posts)} existing records from previous run.")
+        except Exception:
+            pass
 
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir="facebook_profile",
-            headless=False,
-            viewport={"width": 1366, "height": 900},
+        storage_state = "storage_state.json" if Path("storage_state.json").exists() else None
+
+        browser = p.chromium.launch(
+            headless=headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+            ],
         )
 
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(PAGE_URL, wait_until="domcontentloaded")
+        context_kwargs = {
+            "viewport": {"width": 1366, "height": 900},
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        }
+        if storage_state:
+            print("[+] Using stored session cookies (storage_state.json)")
+            context_kwargs["storage_state"] = storage_state
+
+        context = browser.new_context(**context_kwargs)
+        page = context.new_page()
+
+        print(f"[+] Navigating to: {PAGE_URL}")
+        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(3000)
+
+        dismiss_login_banner(page)
         viewport_h = page.viewport_size["height"] if page.viewport_size else 900
 
-        print("\n[+] Browser loaded.")
-        print("[+] Ensure the Facebook Page timeline is visible.")
-        input("[+] Press ENTER to start smooth scrolling...")
+        print(f"[+] Starting pass 1 scraping across up to {MAX_SCROLLS} scrolls...")
 
-        # -------------------------------------------------------------
-        # PASS 1: Smooth Downward Scroll (No hovering, No scroll jumps)
-        # -------------------------------------------------------------
         for scroll_no in range(MAX_SCROLLS):
+            if scroll_no % 15 == 0:
+                dismiss_login_banner(page)
+
             cards = get_feed_cards(page)
             card_count = cards.count()
 
@@ -257,22 +288,13 @@ def main():
                 card = cards.nth(i)
                 try:
                     box = card.bounding_box()
-                    if not box:
+                    if not box or (box["y"] + box["height"]) < 60 or box["y"] > (viewport_h + 400):
                         continue
 
-                    # Skip cards already scrolled past
-                    if (box["y"] + box["height"]) < 60:
-                        continue
-
-                    # Skip cards too far below
-                    if box["y"] > (viewport_h + 300):
-                        continue
-
-                    # Read text
                     msg_loc = card.locator('div[data-ad-preview="message"], div[data-ad-rendering-role="story_message"]')
                     post_text = ""
                     if msg_loc.count() > 0:
-                        post_text = clean_text(msg_loc.first.inner_text(timeout=500))
+                        post_text = clean_text(msg_loc.first.inner_text(timeout=400))
                     else:
                         colored_loc = card.locator('div[style*="font-size: 30px"], div[style*="font-size: 24px"]')
                         if colored_loc.count() > 0:
@@ -281,19 +303,17 @@ def main():
                     if not matches_keywords(post_text):
                         continue
 
-                    # Get permalink
                     url = get_post_permalink(card)
                     sig = url or post_text[:100]
 
                     if sig in collected_posts:
                         continue
 
-                    # Expand "See more" if needed
                     try:
                         see_more = card.locator('div[role="button"]:has-text("See more"), div[role="button"]:has-text("আরও দেখুন")')
                         if see_more.count() > 0 and see_more.first.is_visible():
-                            see_more.first.click(timeout=400, force=True)
-                            post_text = clean_text(msg_loc.first.inner_text(timeout=500))
+                            see_more.first.click(timeout=300, force=True)
+                            post_text = clean_text(msg_loc.first.inner_text(timeout=400))
                     except Exception:
                         pass
 
@@ -302,42 +322,31 @@ def main():
                         "text": post_text,
                         "url": url,
                     }
-
-                    matched = [w for w in KEYWORDS if w in post_text]
-                    print(f"  [Found Post] Matched: {matched} | URL: {url or 'N/A'}")
+                    print(f"  [Post Found] {url or post_text[:40]}...")
 
                 except Exception:
                     continue
 
-            print(f"Scroll {scroll_no + 1}/{MAX_SCROLLS} | Unique Matched: {len(collected_posts)}")
+            # Periodically write data to disk every 25 scrolls
+            if (scroll_no + 1) % 25 == 0 or scroll_no == MAX_SCROLLS - 1:
+                save_data(collected_posts)
+                print(f"[Scroll {scroll_no + 1}/{MAX_SCROLLS}] Auto-saved. Unique matched: {len(collected_posts)}")
+
             page.evaluate("window.scrollBy(0, Math.floor(window.innerHeight * 0.85))")
             page.wait_for_timeout(SCROLL_WAIT_MS)
 
-        # -------------------------------------------------------------
-        # PASS 2: Extract Exact Timestamps using Direct-Link Hover
-        # -------------------------------------------------------------
-        print(f"\n[+] Pass 1 complete. Extracting exact timestamps for {len(collected_posts)} matched posts...")
+        print(f"\n[+] Pass 1 complete. Extracting timestamps for {len(collected_posts)} posts...")
+        processed = 0
         for sig, post in collected_posts.items():
-            if post["url"]:
-                print(f"  Fetching date for: {post['url']}")
-                exact_ts = scrape_post_timestamp_from_url(context, post["url"])
-                post["date_time"] = exact_ts
-                print(f"  -> Date: {exact_ts or 'Not available'}")
+            if post["url"] and not post["date_time"]:
+                post["date_time"] = scrape_post_timestamp_from_url(context, post["url"])
+                processed += 1
+                if processed % 10 == 0:
+                    save_data(collected_posts)
 
-        # Export with Pandas
-        df = pd.DataFrame(list(collected_posts.values()))
-
-        json_path = OUTPUT_DIR / "posts.json"
-        csv_path = OUTPUT_DIR / "posts.csv"
-
-        df.to_json(json_path, orient="records", force_ascii=False, indent=2)
-        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-
-        print(f"\nDone! Exported {len(df)} posts.")
-        print(f"CSV saved to:  {csv_path.resolve()}")
-        print(f"JSON saved to: {json_path.resolve()}")
-
-        context.close()
+        save_data(collected_posts)
+        print(f"\n[+] Finished. Total {len(collected_posts)} records written to output/.")
+        browser.close()
 
 
 if __name__ == "__main__":
