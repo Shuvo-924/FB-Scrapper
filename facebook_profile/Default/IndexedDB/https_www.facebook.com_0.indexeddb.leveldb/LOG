@@ -1,0 +1,102 @@
+2026/10/17-21:16:17.845 24a51 Reusing MANIFEST /home/shuvo/Codes/FB_Scrapper/facebook_profile/Default/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/10/17-21:16:17.845 24a51 Recovering log #4
+2026/10/17-21:16:17.845 24a51 Reusing old log /home/shuvo/Codes/FB_Scrapper/facebook_profile/Default/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb/000004.log 
+2026/10/17-21:45:07.441 24a55 Level-0 table #8: started
+2026/10/17-21:45:07.492 24a55 Level-0 table #8: 1611685 bytes OK
+2026/10/17-21:45:07.497 24a55 Delete type=0 #4
+2026/10/17-21:45:21.441 24a51 Compacting 1@1 + 1@2 files
+2026/10/17-21:45:21.457 24a51 Generated table #9@1: 3130 keys, 285257 bytes
+2026/10/17-21:45:21.457 24a51 Compacted 1@1 + 1@2 files => 285257 bytes
+2026/10/17-21:45:21.459 24a51 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/17-21:45:21.459 24a51 Delete type=2 #5
+2026/10/17-21:45:21.459 24a51 Delete type=2 #8
+2026/10/17-22:12:27.441 24a55 Level-0 table #11: started
+2026/10/17-22:12:27.460 24a55 Level-0 table #11: 1580963 bytes OK
+2026/10/17-22:12:27.463 24a55 Delete type=0 #7
+2026/10/17-22:12:34.139 24a55 Compacting 1@1 + 1@2 files
+2026/10/17-22:12:34.148 24a55 Generated table #12@1: 3217 keys, 293448 bytes
+2026/10/17-22:12:34.148 24a55 Compacted 1@1 + 1@2 files => 293448 bytes
+2026/10/17-22:12:34.150 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/17-22:12:34.150 24a55 Delete type=2 #9
+2026/10/17-22:12:34.150 24a55 Delete type=2 #11
+2026/10/17-22:38:07.441 24a55 Level-0 table #14: started
+2026/10/17-22:38:07.529 24a55 Level-0 table #14: 1654923 bytes OK
+2026/10/17-22:38:07.533 24a55 Delete type=0 #10
+2026/10/17-22:38:25.110 24a55 Compacting 1@1 + 1@2 files
+2026/10/17-22:38:25.173 24a55 Generated table #15@1: 3482 keys, 355385 bytes
+2026/10/17-22:38:25.173 24a55 Compacted 1@1 + 1@2 files => 355385 bytes
+2026/10/17-22:38:25.176 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/17-22:38:25.176 24a55 Delete type=2 #12
+2026/10/17-22:38:25.176 24a55 Delete type=2 #14
+2026/10/17-23:04:10.441 24a55 Level-0 table #17: started
+2026/10/17-23:04:10.497 24a55 Level-0 table #17: 1555718 bytes OK
+2026/10/17-23:04:10.501 24a55 Delete type=0 #13
+2026/10/17-23:04:33.224 24a55 Compacting 1@1 + 1@2 files
+2026/10/17-23:04:33.245 24a55 Generated table #18@1: 4009 keys, 410384 bytes
+2026/10/17-23:04:33.245 24a55 Compacted 1@1 + 1@2 files => 410384 bytes
+2026/10/17-23:04:33.247 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/17-23:36:09.442 24a55 Level-0 table #20: started
+2026/10/17-23:36:09.456 24a55 Level-0 table #20: 1511854 bytes OK
+2026/10/17-23:36:09.459 24a55 Delete type=0 #16
+2026/10/17-23:36:09.459 24a55 Delete type=2 #15
+2026/10/17-23:36:09.459 24a55 Delete type=2 #17
+2026/10/17-23:36:24.441 24a55 Compacting 1@1 + 1@2 files
+2026/10/17-23:36:24.490 24a55 Generated table #21@1: 4030 keys, 412704 bytes
+2026/10/17-23:36:24.490 24a55 Compacted 1@1 + 1@2 files => 412704 bytes
+2026/10/17-23:36:24.493 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/17-23:36:24.493 24a55 Delete type=2 #18
+2026/10/17-23:36:24.493 24a55 Delete type=2 #20
+2026/10/18-00:00:36.441 24a55 Level-0 table #23: started
+2026/10/18-00:00:36.542 24a55 Level-0 table #23: 1635527 bytes OK
+2026/10/18-00:00:36.545 24a55 Delete type=0 #19
+2026/10/18-00:01:07.411 24a55 Compacting 1@1 + 1@2 files
+2026/10/18-00:01:07.462 24a55 Generated table #24@1: 4083 keys, 418278 bytes
+2026/10/18-00:01:07.462 24a55 Compacted 1@1 + 1@2 files => 418278 bytes
+2026/10/18-00:01:07.464 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/18-00:01:07.465 24a55 Delete type=2 #21
+2026/10/18-00:01:07.465 24a55 Delete type=2 #23
+2026/10/18-00:26:34.441 24a55 Level-0 table #26: started
+2026/10/18-00:26:34.508 24a55 Level-0 table #26: 1628590 bytes OK
+2026/10/18-00:26:34.512 24a55 Delete type=0 #22
+2026/10/18-00:26:48.441 24a55 Compacting 1@1 + 1@2 files
+2026/10/18-00:26:48.457 24a55 Generated table #27@1: 4382 keys, 435857 bytes
+2026/10/18-00:26:48.457 24a55 Compacted 1@1 + 1@2 files => 435857 bytes
+2026/10/18-00:26:48.459 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/18-00:26:48.459 24a55 Delete type=2 #24
+2026/10/18-00:26:48.459 24a55 Delete type=2 #26
+2026/10/18-00:50:08.441 24a55 Level-0 table #29: started
+2026/10/18-00:50:08.567 24a55 Level-0 table #29: 1573887 bytes OK
+2026/10/18-00:50:08.571 24a55 Delete type=0 #25
+2026/10/18-00:50:23.111 24a55 Compacting 1@1 + 1@2 files
+2026/10/18-00:50:23.122 24a55 Generated table #30@1: 4377 keys, 431162 bytes
+2026/10/18-00:50:23.122 24a55 Compacted 1@1 + 1@2 files => 431162 bytes
+2026/10/18-00:50:23.124 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/18-00:50:23.125 24a55 Delete type=2 #29
+2026/10/18-00:50:23.125 24a55 Delete type=2 #27
+2026/10/18-01:15:53.441 24a55 Level-0 table #32: started
+2026/10/18-01:15:53.511 24a55 Level-0 table #32: 1457310 bytes OK
+2026/10/18-01:15:53.515 24a55 Delete type=0 #28
+2026/10/18-01:16:06.440 24a55 Compacting 1@1 + 1@2 files
+2026/10/18-01:16:06.515 24a55 Generated table #33@1: 4380 keys, 433956 bytes
+2026/10/18-01:16:06.515 24a55 Compacted 1@1 + 1@2 files => 433956 bytes
+2026/10/18-01:16:06.517 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/18-01:16:06.517 24a55 Delete type=2 #32
+2026/10/18-01:16:06.518 24a55 Delete type=2 #30
+2026/10/18-01:43:22.963 24a55 Level-0 table #35: started
+2026/10/18-01:43:23.069 24a55 Level-0 table #35: 1589242 bytes OK
+2026/10/18-01:43:23.072 24a55 Delete type=0 #31
+2026/10/18-01:43:39.441 24a55 Compacting 1@1 + 1@2 files
+2026/10/18-01:43:39.491 24a55 Generated table #36@1: 4385 keys, 435357 bytes
+2026/10/18-01:43:39.491 24a55 Compacted 1@1 + 1@2 files => 435357 bytes
+2026/10/18-01:43:39.493 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/18-01:43:39.493 24a55 Delete type=2 #33
+2026/10/18-01:43:39.493 24a55 Delete type=2 #35
+2026/10/18-02:11:27.442 24a55 Level-0 table #38: started
+2026/10/18-02:11:27.571 24a55 Level-0 table #38: 1445210 bytes OK
+2026/10/18-02:11:27.574 24a55 Delete type=0 #34
+2026/10/18-02:11:45.441 24a55 Compacting 1@1 + 1@2 files
+2026/10/18-02:11:45.477 24a55 Generated table #39@1: 4381 keys, 433403 bytes
+2026/10/18-02:11:45.477 24a55 Compacted 1@1 + 1@2 files => 433403 bytes
+2026/10/18-02:11:45.479 24a55 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/10/18-02:11:45.479 24a55 Delete type=2 #38
+2026/10/18-02:11:45.479 24a55 Delete type=2 #36

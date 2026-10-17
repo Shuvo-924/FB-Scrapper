@@ -1,0 +1,6 @@
+2026/10/17-21:14:26.582 241ba Reusing MANIFEST /home/shuvo/Codes/FB_Scrapper/facebook_profile/Default/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/10/17-21:14:26.582 241ba Recovering log #3
+2026/10/17-21:14:26.600 241ba Reusing old log /home/shuvo/Codes/FB_Scrapper/facebook_profile/Default/IndexedDB/https_www.facebook.com_0.indexeddb.leveldb/000003.log 
+2026/10/17-21:15:19.002 241be Level-0 table #5: started
+2026/10/17-21:15:19.078 241be Level-0 table #5: 1635155 bytes OK
+2026/10/17-21:15:19.083 241be Delete type=0 #3
