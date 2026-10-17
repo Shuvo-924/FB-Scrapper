@@ -64,7 +64,7 @@ jobs:
           KEYWORDS: ${{ github.event.inputs.keywords }}
           SCROLL_WAIT_MS: "2500"
         run: |
-          python scraper.py
+          python scrapper.py
 
       - name: Upload Scraped Output Artifacts
         uses: actions/upload-artifact@v4
