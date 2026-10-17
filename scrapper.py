@@ -1,10 +1,7 @@
-import argparse
 import datetime
 import json
 import os
 import re
-import sys
-import time
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -78,7 +75,6 @@ def get_post_permalink(card) -> str:
         try:
             raw_href = candidate_links.nth(i).get_attribute("href") or ""
             parsed = urlparse(raw_href)
-
             if any(marker in parsed.path for marker in ["/posts/", "/videos/", "/watch", "/reel/", "/photo", "/permalink/"]):
                 return clean_facebook_url(urljoin("https://www.facebook.com", raw_href))
             if any(param in parsed.query for param in ["story_fbid", "fbid", "v="]):
@@ -101,24 +97,22 @@ def get_post_permalink(card) -> str:
     return ""
 
 
-def dismiss_login_banner(page):
-    """Dismisses Facebook's intrusive unauthenticated banners/overlays."""
-    close_selectors = [
-        'div[role="dialog"] div[aria-label="Close"]',
-        'div[role="banner"] div[aria-label="Close"]',
-        'div[aria-label="Decline optional cookies"]',
-        'div[aria-label="Allow all cookies"]',
-        'div[role="button"]:has-text("Not now")',
-        'div[role="button"]:has-text("এখন নয়")'
-    ]
-    for selector in close_selectors:
-        try:
-            btn = page.locator(selector).first
-            if btn.is_visible(timeout=1000):
-                btn.click()
-                page.wait_for_timeout(500)
-        except Exception:
-            pass
+def unlock_facebook_scroll(page):
+    """Removes scroll locks and floating blocker overlays injected by Facebook."""
+    try:
+        page.evaluate("""() => {
+            document.documentElement.style.overflow = 'auto';
+            document.body.style.overflow = 'auto';
+            // Remove full-screen blur/login overlays
+            const overlays = document.querySelectorAll('div[data-nosnippet], div[role="dialog"]');
+            overlays.forEach(el => {
+                if (el.innerText.includes("Log In") || el.innerText.includes("See more on Facebook") || el.innerText.includes("লগ ইন করুন")) {
+                    el.remove();
+                }
+            });
+        }""")
+    except Exception:
+        pass
 
 
 def get_feed_cards(page):
@@ -139,22 +133,16 @@ def get_feed_cards(page):
 def scrape_post_timestamp_from_url(context, post_url: str) -> str:
     if not post_url:
         return ""
-
     post_page = None
     try:
         post_page = context.new_page()
         post_page.goto(post_url, wait_until="domcontentloaded", timeout=25000)
-
         try:
-            post_page.wait_for_selector(
-                '[data-ad-rendering-role="profile_name"], h2, div[role="main"]',
-                timeout=8000
-            )
+            post_page.wait_for_selector('[data-ad-rendering-role="profile_name"], h2, div[role="main"]', timeout=8000)
         except Exception:
             pass
 
-        post_page.wait_for_timeout(1200)
-
+        post_page.wait_for_timeout(1000)
         timestamp_selectors = [
             'div[data-ad-rendering-role="profile_name"] ~ div a[role="link"]',
             'h2 ~ div a[role="link"]',
@@ -176,7 +164,6 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
                 break
 
         exact_date = ""
-
         if target:
             target.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'center' })")
             post_page.wait_for_timeout(300)
@@ -187,7 +174,6 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
                 target.hover(force=True, timeout=2000)
 
             post_page.wait_for_timeout(1200)
-
             tooltips = post_page.locator('div[role="tooltip"]')
             for idx in range(tooltips.count()):
                 t_val = tooltips.nth(idx).inner_text().strip()
@@ -204,9 +190,8 @@ def scrape_post_timestamp_from_url(context, post_url: str) -> str:
                 exact_date = dt.strftime("%A, %d %B %Y at %H:%M")
 
         return exact_date
-
     except Exception as e:
-        print(f"    [!] Timestamp parse error: {e}")
+        print(f"    [!] Timestamp parse error: {e}", flush=True)
         return ""
     finally:
         if post_page:
@@ -220,29 +205,15 @@ def save_data(collected_posts: dict):
     if not collected_posts:
         return
     df = pd.DataFrame(list(collected_posts.values()))
-    json_path = OUTPUT_DIR / "posts.json"
-    csv_path = OUTPUT_DIR / "posts.csv"
-    df.to_json(json_path, orient="records", force_ascii=False, indent=2)
-    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_json(OUTPUT_DIR / "posts.json", orient="records", force_ascii=False, indent=2)
+    df.to_csv(OUTPUT_DIR / "posts.csv", index=False, encoding="utf-8-sig")
 
 
 def main():
     collected_posts = {}
     is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
     headless = True if is_ci else os.getenv("HEADLESS", "false").lower() == "true"
-
-    # Load existing posts if resuming an earlier artifact
-    existing_json = OUTPUT_DIR / "posts.json"
-    if existing_json.exists():
-        try:
-            with open(existing_json, "r", encoding="utf-8") as f:
-                prev_data = json.load(f)
-                for item in prev_data:
-                    sig = item.get("url") or item.get("text", "")[:100]
-                    collected_posts[sig] = item
-            print(f"[+] Loaded {len(collected_posts)} existing records from previous run.")
-        except Exception:
-            pass
 
     with sync_playwright() as p:
         storage_state = "storage_state.json" if Path("storage_state.json").exists() else None
@@ -262,24 +233,26 @@ def main():
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         }
         if storage_state:
-            print("[+] Using stored session cookies (storage_state.json)")
+            print("[+] Using stored session cookies (storage_state.json)", flush=True)
             context_kwargs["storage_state"] = storage_state
 
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
 
-        print(f"[+] Navigating to: {PAGE_URL}")
+        print(f"[+] Navigating to: {PAGE_URL}", flush=True)
         page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(3000)
 
-        dismiss_login_banner(page)
+        unlock_facebook_scroll(page)
         viewport_h = page.viewport_size["height"] if page.viewport_size else 900
 
-        print(f"[+] Starting pass 1 scraping across up to {MAX_SCROLLS} scrolls...")
+        print(f"[+] Starting pass 1 scraping across up to {MAX_SCROLLS} scrolls...", flush=True)
+
+        last_height = 0
+        stalled_count = 0
 
         for scroll_no in range(MAX_SCROLLS):
-            if scroll_no % 15 == 0:
-                dismiss_login_banner(page)
+            unlock_facebook_scroll(page)
 
             cards = get_feed_cards(page)
             card_count = cards.count()
@@ -322,30 +295,52 @@ def main():
                         "text": post_text,
                         "url": url,
                     }
-                    print(f"  [Post Found] {url or post_text[:40]}...")
+                    print(f"  [Found Post] Matched: {[w for w in KEYWORDS if w in post_text]} | URL: {url or 'N/A'}", flush=True)
 
                 except Exception:
                     continue
 
-            # Periodically write data to disk every 25 scrolls
-            if (scroll_no + 1) % 25 == 0 or scroll_no == MAX_SCROLLS - 1:
-                save_data(collected_posts)
-                print(f"[Scroll {scroll_no + 1}/{MAX_SCROLLS}] Auto-saved. Unique matched: {len(collected_posts)}")
+            # Check if page is actually scrolling or stuck
+            current_height = page.evaluate("document.body.scrollHeight")
+            if current_height == last_height:
+                stalled_count += 1
+                if stalled_count >= 5:
+                    print("  [!] Page scroll stalled. Nudging feed...", flush=True)
+                    # Press PageDown key to trigger infinite scroll observer
+                    page.keyboard.press("PageDown")
+                    page.wait_for_timeout(1000)
+                    page.keyboard.press("End")
+                    page.wait_for_timeout(1500)
+                    # Save a debug screenshot if stuck for 15 scrolls
+                    if stalled_count == 15:
+                        page.screenshot(path="output/debug_feed.png")
+                        print("  [!] Saved debug screenshot to output/debug_feed.png", flush=True)
+            else:
+                stalled_count = 0
+                last_height = current_height
 
-            page.evaluate("window.scrollBy(0, Math.floor(window.innerHeight * 0.85))")
+            # Perform physical keyboard scroll (much more reliable on Facebook than window.scrollBy)
+            page.keyboard.press("PageDown")
             page.wait_for_timeout(SCROLL_WAIT_MS)
 
-        print(f"\n[+] Pass 1 complete. Extracting timestamps for {len(collected_posts)} posts...")
+            if (scroll_no + 1) % 25 == 0 or scroll_no == MAX_SCROLLS - 1:
+                save_data(collected_posts)
+                print(f"Scroll {scroll_no + 1}/{MAX_SCROLLS} | Unique Matched: {len(collected_posts)} | Height: {current_height}px", flush=True)
+
+        print(f"\n[+] Pass 1 complete. Extracting timestamps for {len(collected_posts)} matched posts...", flush=True)
         processed = 0
         for sig, post in collected_posts.items():
             if post["url"] and not post["date_time"]:
-                post["date_time"] = scrape_post_timestamp_from_url(context, post["url"])
+                print(f"  Fetching date for: {post['url']}", flush=True)
+                exact_ts = scrape_post_timestamp_from_url(context, post["url"])
+                post["date_time"] = exact_ts
+                print(f"  -> Date: {exact_ts or 'Not available'}", flush=True)
                 processed += 1
                 if processed % 10 == 0:
                     save_data(collected_posts)
 
         save_data(collected_posts)
-        print(f"\n[+] Finished. Total {len(collected_posts)} records written to output/.")
+        print(f"\nDone! Exported {len(collected_posts)} posts to output/.", flush=True)
         browser.close()
 
 
