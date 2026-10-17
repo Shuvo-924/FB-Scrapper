@@ -1,0 +1,89 @@
+name: Facebook Train Post Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_scrolls:
+        description: 'Number of scrolls to perform'
+        required: true
+        default: '1500'
+      keywords:
+        description: 'Comma-separated keywords to filter'
+        required: true
+        default: 'ঢাকা,সিলেট,কমলাপুর'
+      page_url:
+        description: 'Facebook page URL'
+        required: true
+        default: 'https://www.facebook.com/KalniBR'
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install playwright pandas
+          fi
+          playwright install chromium --with-deps
+
+      - name: Restore Facebook Session (storage_state.json)
+        env:
+          FB_STORAGE_STATE: ${{ secrets.FB_STORAGE_STATE }}
+        run: |
+          if [ -n "$FB_STORAGE_STATE" ]; then
+            echo "$FB_STORAGE_STATE" > storage_state.json
+            echo "✓ Successfully restored storage_state.json from GitHub Secrets."
+          else
+            echo "⚠ No FB_STORAGE_STATE secret detected. Running unauthenticated."
+          fi
+
+      - name: Run Scraper
+        env:
+          CI: "true"
+          HEADLESS: "true"
+          PAGE_URL: ${{ github.event.inputs.page_url }}
+          MAX_SCROLLS: ${{ github.event.inputs.max_scrolls }}
+          KEYWORDS: ${{ github.event.inputs.keywords }}
+          SCROLL_WAIT_MS: "2500"
+        run: |
+          python scraper.py
+
+      - name: Upload Scraped Output Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: train-scraped-posts-${{ github.run_id }}
+          path: output/
+          retention-days: 30
+
+      - name: Commit and Push Results to Repository
+        if: always()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add output/
+          if git diff --staged --quiet; then
+            echo "No new data changes to commit."
+          else
+            git commit -m "chore: auto-update scraped posts (Run #${{ github.run_number }}) [skip ci]"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push origin HEAD:${{ github.ref_name }}
+          fi
