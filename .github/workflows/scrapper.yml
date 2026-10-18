@@ -34,9 +34,10 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies & Xvfb
+      - name: Install dependencies, Xvfb, VNC & noVNC
         run: |
-          sudo apt-get update && sudo apt-get install -y xvfb
+          sudo apt-get update
+          sudo apt-get install -y xvfb x11vnc novnc websockify
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
@@ -53,7 +54,7 @@ jobs:
             echo "$FB_STORAGE_STATE" > storage_state.json
             echo "✓ Successfully restored storage_state.json from GitHub Secrets."
           else
-            echo "⚠ No FB_STORAGE_STATE secret detected. Running unauthenticated."
+            echo "⚠ No FB_STORAGE_STATE secret detected. Will request live login if prompted."
           fi
 
       - name: Run Scraper in Xvfb
@@ -64,8 +65,6 @@ jobs:
           MAX_SCROLLS: ${{ github.event.inputs.max_scrolls }}
           KEYWORDS: ${{ github.event.inputs.keywords }}
           SCROLL_WAIT_MS: "2500"
-          FB_EMAIL: ${{ secrets.FB_EMAIL }}          # <--- Added
-          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}    # <--- Added
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python -u scrapper.py
 

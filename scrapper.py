@@ -1,8 +1,12 @@
 import datetime
 import json
-import time
 import os
 import re
+import shutil
+import socket
+import subprocess
+import time
+import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -10,7 +14,7 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 
 PAGE_URL = os.getenv("PAGE_URL", "https://www.facebook.com/KalniBR")
-MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "500"))
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "1500"))
 SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "2500"))
 KEYWORDS_ENV = os.getenv("KEYWORDS", "ঢাকা,সিলেট,কমলাপুর")
 KEYWORDS = [k.strip() for k in KEYWORDS_ENV.split(",") if k.strip()]
@@ -18,11 +22,208 @@ KEYWORDS = [k.strip() for k in KEYWORDS_ENV.split(",") if k.strip()]
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+TUNNEL_PROCESSES = []
+
 IGNORE_TOOLTIPS = {
     "marketplace", "home", "video", "friends", "groups",
     "gaming", "menu", "notifications", "account", "reels",
     "facebook", "watch", "messages", "see your profile"
 }
+
+
+def cleanup_tunnels():
+    global TUNNEL_PROCESSES
+    print("[*] Cleaning up live handover tunnel processes...", flush=True)
+    for p in TUNNEL_PROCESSES:
+        try:
+            p.terminate()
+            p.wait(timeout=2)
+        except Exception:
+            try:
+                p.kill()
+            except Exception:
+                pass
+    TUNNEL_PROCESSES = []
+
+
+def is_port_listening(port, host="127.0.0.1", timeout=1.0):
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            return s.connect_ex((host, port)) == 0
+    except Exception:
+        return False
+
+
+def start_live_handover() -> bool:
+    """Launches x11vnc, websockify (noVNC), and Cloudflare Tunnel for live browser access."""
+    try:
+        print("\n🌐 [LIVE HANDOVER] Initializing VNC & Cloudflare Tunnel...", flush=True)
+        subprocess.run(["pkill", "-9", "-f", "x11vnc"], capture_output=True)
+        subprocess.run(["pkill", "-9", "-f", "websockify"], capture_output=True)
+        time.sleep(1)
+
+        display = os.environ.get("DISPLAY")
+        if not display and os.path.exists("/tmp/.X11-unix"):
+            for entry in sorted(os.listdir("/tmp/.X11-unix")):
+                if entry.startswith("X"):
+                    display = f":{entry[1:]}"
+                    break
+        if not display:
+            display = ":99"
+
+        print(f"🖥️ Target Virtual Display: {display}", flush=True)
+        x11vnc_cmd = [
+            "x11vnc", "-display", display, "-nopw", "-listen", "127.0.0.1",
+            "-rfbport", "5900", "-xdamage", "-defer", "15", "-wait", "20",
+            "-xkb", "-forever", "-shared",
+        ]
+        xauth = os.environ.get("XAUTHORITY")
+        if xauth and os.path.exists(xauth):
+            x11vnc_cmd.extend(["-auth", xauth])
+
+        vnc_proc = subprocess.Popen(x11vnc_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        TUNNEL_PROCESSES.append(vnc_proc)
+
+        vnc_ready = False
+        for _ in range(15):
+            if is_port_listening(5900):
+                vnc_ready = True
+                print("✅ x11vnc is active on port 5900!", flush=True)
+                break
+            if vnc_proc.poll() is not None:
+                out, _ = vnc_proc.communicate()
+                print(f"❌ x11vnc failed to start:\n{out}", flush=True)
+                return False
+            time.sleep(0.5)
+
+        if not vnc_ready:
+            print("❌ Timed out waiting for x11vnc.", flush=True)
+            return False
+
+        novnc_dir = "/usr/share/novnc"
+        web_proc = subprocess.Popen(
+            ["websockify", f"--web={novnc_dir}", "6080", "127.0.0.1:5900"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        TUNNEL_PROCESSES.append(web_proc)
+
+        web_ready = False
+        for _ in range(15):
+            if is_port_listening(6080):
+                web_ready = True
+                print("✅ websockify is active on port 6080!", flush=True)
+                break
+            if web_proc.poll() is not None:
+                out, _ = web_proc.communicate()
+                print(f"❌ websockify failed to start:\n{out}", flush=True)
+                return False
+            time.sleep(0.5)
+
+        if not web_ready:
+            print("❌ Timed out waiting for websockify.", flush=True)
+            return False
+
+        # Prepare cloudflared binary
+        cloudflared_bin = shutil.which("cloudflared") or "/usr/local/bin/cloudflared"
+        if not os.path.exists(cloudflared_bin):
+            tmp_cf = "/tmp/cloudflared"
+            if not os.path.exists(tmp_cf):
+                print("⬇️ Downloading cloudflared binary...", flush=True)
+                urllib.request.urlretrieve(
+                    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64",
+                    tmp_cf
+                )
+                os.chmod(tmp_cf, 0o755)
+            cloudflared_bin = tmp_cf
+
+        cf_log_path = "/tmp/cloudflared.log"
+        if os.path.exists(cf_log_path):
+            os.remove(cf_log_path)
+
+        cf_proc = subprocess.Popen(
+            [cloudflared_bin, "tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:6080", "--logfile", cf_log_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        TUNNEL_PROCESSES.append(cf_proc)
+
+        base_url = None
+        start_wait = time.time()
+        print("⏳ Generating Cloudflare Tunnel URL...", flush=True)
+
+        while time.time() - start_wait < 35:
+            if os.path.exists(cf_log_path):
+                try:
+                    with open(cf_log_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                        match = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
+                        if match:
+                            base_url = match.group(0)
+                            break
+                except Exception:
+                    pass
+            time.sleep(1)
+
+        if not base_url:
+            print("❌ Timed out waiting for Cloudflare Tunnel URL.", flush=True)
+            return False
+
+        tunnel_url = (
+            f"{base_url}/vnc.html?autoconnect=true&resize=scale&path=websockify&quality=5&compression=8&show_dot=true"
+        )
+
+        print("\n" + "=" * 75, flush=True)
+        print("🚨 ACTION REQUIRED: LIVE BROWSER ACCESS IS READY!", flush=True)
+        print(f"\n👉 OPEN THIS LINK IN YOUR BROWSER:\n   {tunnel_url}\n", flush=True)
+        print("Log in to Facebook, complete 2FA/approval, and navigate to KalniBR.", flush=True)
+        print("Once the timeline is visible, the script will automatically take over!", flush=True)
+        print("=" * 75 + "\n", flush=True)
+        return True
+    except Exception as e:
+        print(f"❌ Error setting up live handover: {e}", flush=True)
+        return False
+
+
+def wait_for_user_handover(page, context, timeout_minutes=10) -> bool:
+    """Waits for user to complete login in the live browser."""
+    if not start_live_handover():
+        return False
+
+    print(f"⏳ Live session active. Waiting up to {timeout_minutes} minutes for login...", flush=True)
+    start_time = time.time()
+    max_seconds = timeout_minutes * 60
+
+    while time.time() - start_time < max_seconds:
+        current_url = page.url
+
+        # Check if user reached target page or completed login
+        is_on_target = "KalniBR" in current_url
+        is_auth_page = any(m in current_url for m in ["login", "checkpoint", "auth_platform"])
+        
+        # Check if feed cards are accessible
+        feed_cards = get_feed_cards(page)
+
+        if (is_on_target and feed_cards.count() > 0) or (not is_auth_page and "facebook.com" in current_url and "/login" not in current_url and feed_cards.count() > 0):
+            print("\n" + "=" * 75, flush=True)
+            print("🎉 [LOGIN CONFIRMED] KalniBR feed is visible!", flush=True)
+            print("Relinquishing live VNC session and resuming autonomous scraping...", flush=True)
+            print("=" * 75 + "\n", flush=True)
+            
+            # Save session for convenience
+            try:
+                context.storage_state(path="storage_state.json")
+                print("[+] Saved session to storage_state.json", flush=True)
+            except Exception:
+                pass
+
+            cleanup_tunnels()
+            return True
+
+        time.sleep(3)
+
+    print("❌ Timed out waiting for manual login.", flush=True)
+    cleanup_tunnels()
+    return False
 
 
 def matches_keywords(text: str) -> bool:
@@ -99,7 +300,6 @@ def get_post_permalink(card) -> str:
 
 
 def unlock_facebook_scroll(page):
-    """Removes scroll lock and dialog overlays injected by Facebook."""
     try:
         page.evaluate("""() => {
             document.documentElement.style.overflow = 'auto';
@@ -209,92 +409,6 @@ def save_data(collected_posts: dict):
     df.to_json(OUTPUT_DIR / "posts.json", orient="records", force_ascii=False, indent=2)
     df.to_csv(OUTPUT_DIR / "posts.csv", index=False, encoding="utf-8-sig")
 
-FB_EMAIL = os.getenv("FB_EMAIL", "")
-FB_PASSWORD = os.getenv("FB_PASSWORD", "")
-
-
-def handle_login_if_needed(page, context):
-    """Navigates to login, fills credentials, and waits for 2FA phone approval."""
-    print("[+] Checking Facebook authentication status...", flush=True)
-    page.goto("https://www.facebook.com/login/", wait_until="domcontentloaded", timeout=45000)
-
-    # 1. Check if we are already logged in or if login inputs exist
-    try:
-        page.wait_for_selector('input[name="email"]', timeout=6000)
-    except Exception:
-        # If email field didn't appear and we're not on a login/checkpoint page, we are logged in
-        if not any(k in page.url for k in ["login", "checkpoint", "auth_platform"]):
-            print("[+] Already logged into Facebook! Skipping login.", flush=True)
-            return
-
-    print("\n[!] Facebook Login Form active.", flush=True)
-
-    if not FB_EMAIL or not FB_PASSWORD:
-        print("[!] ERROR: FB_EMAIL or FB_PASSWORD not set!", flush=True)
-        return
-
-    # 2. Fill credentials and submit
-    print("[+] Submitting login credentials...", flush=True)
-    page.locator('input[name="email"]').fill(FB_EMAIL)
-    page.wait_for_timeout(400)
-    page.locator('input[name="pass"]').fill(FB_PASSWORD)
-    page.wait_for_timeout(400)
-    page.locator('input[name="pass"]').press("Enter")
-
-    # 3. Wait for Facebook to navigate AWAY from /login/
-    print("[+] Credentials submitted. Waiting for page transition...", flush=True)
-    try:
-        # Wait up to 15s for the URL to leave the /login page
-        page.wait_for_url(lambda u: "/login" not in u, timeout=15000)
-    except Exception:
-        pass
-
-    # 4. Handle 2FA / Device Approval ("Check your other device")
-    start_time = time.time()
-    max_wait_seconds = 240  # 4 minutes to tap on your phone
-    logged_code = False
-
-    print("[+] Waiting for 2FA / Device Approval...", flush=True)
-
-    while time.time() - start_time < max_wait_seconds:
-        current_url = page.url
-
-        # Check if 2FA screen is showing
-        if any(marker in current_url for marker in ["auth_platform", "checkpoint"]):
-            try:
-                body_text = page.locator("body").inner_text()
-                if not logged_code:
-                    match = re.search(r"tap\s*(\d+)\s*to verify", body_text, re.I)
-                    if match:
-                        code = match.group(1)
-                        print("\n" + "=" * 55, flush=True)
-                        print(f"👉 ACTION REQUIRED ON YOUR PHONE: Tap [{code}] on Facebook!", flush=True)
-                        print("=" * 55 + "\n", flush=True)
-                        logged_code = True
-                    elif "Check your other device" in body_text:
-                        print("[!] 2FA screen active. Approve the notification on your phone...", flush=True)
-                        logged_code = True
-            except Exception:
-                pass
-            
-            # Still on 2FA page -> continue waiting
-            page.wait_for_timeout(2000)
-            continue
-
-        # If the URL is no longer in login/checkpoint/auth_platform, login was approved!
-        if "facebook.com" in current_url and not any(m in current_url for m in ["login", "checkpoint", "auth_platform"]):
-            print("\n[✓] Login successfully approved!", flush=True)
-            page.wait_for_timeout(3000)
-            try:
-                context.storage_state(path="storage_state.json")
-                print("[+] Saved session cookies to storage_state.json", flush=True)
-            except Exception as e:
-                print(f"[!] Could not save storage_state: {e}", flush=True)
-            return
-
-        page.wait_for_timeout(2000)
-
-    print("[!] Timed out waiting for 2FA approval.", flush=True)
 
 def main():
     collected_posts = {}
@@ -302,7 +416,6 @@ def main():
     with sync_playwright() as p:
         storage_state = "storage_state.json" if Path("storage_state.json").exists() else None
 
-        # Launch headed (Xvfb provides the virtual screen 1920x1080)
         browser = p.chromium.launch(
             headless=False,
             args=[
@@ -318,22 +431,30 @@ def main():
             "viewport": {"width": 1920, "height": 1080},
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
-        # if storage_state:
-        #     print("[+] Using stored session cookies (storage_state.json)", flush=True)
-        #     context_kwargs["storage_state"] = storage_state
+        if storage_state:
+            print("[+] Found storage_state.json. Applying cookies...", flush=True)
+            context_kwargs["storage_state"] = storage_state
 
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
-        page.goto("https://facebook.com", wait_until="domcontentloaded", timeout=45000)
 
-        handle_login_if_needed(page, context)
+        print(f"[+] Navigating to: {PAGE_URL}", flush=True)
+        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(4000)
 
-        # If it had to log in, re-navigate cleanly to the target group/page
-        if PAGE_URL not in page.url:
-            print(f"[+] Re-navigating to target: {PAGE_URL}", flush=True)
+        # Detect if Facebook redirects to login, checkpoint, or blocks the feed
+        is_auth_page = any(m in page.url for m in ["login", "checkpoint", "auth_platform"])
+        cards = get_feed_cards(page)
+
+        if is_auth_page or cards.count() == 0:
+            print("[!] Facebook requires user interaction/login. Triggering Live Handover...", flush=True)
+            wait_for_user_handover(page, context, timeout_minutes=10)
+
+        # Ensure we are on KalniBR and the feed is visible
+        if "KalniBR" not in page.url:
+            print(f"[+] Directing to {PAGE_URL}...", flush=True)
             page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(3000)
-        # -----------------------------------------------------
+            page.wait_for_timeout(4000)
 
         unlock_facebook_scroll(page)
         viewport_h = 1080
@@ -392,12 +513,12 @@ def main():
                 except Exception:
                     continue
 
-            # Verify scroll progress
+            # Verify scroll progression
             current_height = page.evaluate("document.body.scrollHeight")
             if current_height == last_height:
                 stalled_count += 1
                 if stalled_count >= 4:
-                    print("  [!] Feed stalled. Nudging down...", flush=True)
+                    print(f"  [!] Feed stalled at {current_height}px. Nudging down...", flush=True)
                     page.keyboard.press("PageDown")
                     page.wait_for_timeout(1000)
                     page.keyboard.press("End")
@@ -429,8 +550,12 @@ def main():
 
         save_data(collected_posts)
         print(f"\nDone! Exported {len(collected_posts)} posts to output/.", flush=True)
+        cleanup_tunnels()
         browser.close()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        cleanup_tunnels()
