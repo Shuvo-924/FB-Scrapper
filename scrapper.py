@@ -313,6 +313,7 @@ def main():
 
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
+        page.goto("facebook.com", wait_until="domcontentloaded", timeout=45000)
 
         handle_login_if_needed(page, context)
 
