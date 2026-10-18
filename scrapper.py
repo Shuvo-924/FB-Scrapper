@@ -9,7 +9,7 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 
 PAGE_URL = os.getenv("PAGE_URL", "https://www.facebook.com/KalniBR")
-MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "500"))
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "1500"))
 SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "2500"))
 KEYWORDS_ENV = os.getenv("KEYWORDS", "ঢাকা,সিলেট,কমলাপুর")
 KEYWORDS = [k.strip() for k in KEYWORDS_ENV.split(",") if k.strip()]
@@ -98,12 +98,11 @@ def get_post_permalink(card) -> str:
 
 
 def unlock_facebook_scroll(page):
-    """Removes scroll locks and floating blocker overlays injected by Facebook."""
+    """Removes scroll lock and dialog overlays injected by Facebook."""
     try:
         page.evaluate("""() => {
             document.documentElement.style.overflow = 'auto';
             document.body.style.overflow = 'auto';
-            // Remove full-screen blur/login overlays
             const overlays = document.querySelectorAll('div[data-nosnippet], div[role="dialog"]');
             overlays.forEach(el => {
                 if (el.innerText.includes("Log In") || el.innerText.includes("See more on Facebook") || el.innerText.includes("লগ ইন করুন")) {
@@ -212,25 +211,25 @@ def save_data(collected_posts: dict):
 
 def main():
     collected_posts = {}
-    is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
-    headless = True if is_ci else os.getenv("HEADLESS", "false").lower() == "true"
 
     with sync_playwright() as p:
         storage_state = "storage_state.json" if Path("storage_state.json").exists() else None
 
+        # Launch headed (Xvfb provides the virtual screen 1920x1080)
         browser = p.chromium.launch(
-            headless=headless,
+            headless=False,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
+                "--start-maximized",
             ],
         )
 
         context_kwargs = {
-            "viewport": {"width": 1366, "height": 900},
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            "viewport": {"width": 1920, "height": 1080},
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
         if storage_state:
             print("[+] Using stored session cookies (storage_state.json)", flush=True)
@@ -239,12 +238,12 @@ def main():
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
 
-        print(f"[+] Navigating to: {PAGE_URL}", flush=True)
+        print(f"[+] Navigating to: {PAGE_URL} inside Xvfb display...", flush=True)
         page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(3000)
 
         unlock_facebook_scroll(page)
-        viewport_h = page.viewport_size["height"] if page.viewport_size else 900
+        viewport_h = 1080
 
         print(f"[+] Starting pass 1 scraping across up to {MAX_SCROLLS} scrolls...", flush=True)
 
@@ -300,32 +299,28 @@ def main():
                 except Exception:
                     continue
 
-            # Check if page is actually scrolling or stuck
+            # Verify scroll progress
             current_height = page.evaluate("document.body.scrollHeight")
             if current_height == last_height:
                 stalled_count += 1
-                if stalled_count >= 5:
-                    print("  [!] Page scroll stalled. Nudging feed...", flush=True)
-                    # Press PageDown key to trigger infinite scroll observer
+                if stalled_count >= 4:
+                    print("  [!] Feed stalled. Nudging down...", flush=True)
                     page.keyboard.press("PageDown")
                     page.wait_for_timeout(1000)
                     page.keyboard.press("End")
                     page.wait_for_timeout(1500)
-                    # Save a debug screenshot if stuck for 15 scrolls
-                    if stalled_count == 15:
+                    if stalled_count == 12:
                         page.screenshot(path="output/debug_feed.png")
-                        print("  [!] Saved debug screenshot to output/debug_feed.png", flush=True)
             else:
                 stalled_count = 0
                 last_height = current_height
 
-            # Perform physical keyboard scroll (much more reliable on Facebook than window.scrollBy)
             page.keyboard.press("PageDown")
             page.wait_for_timeout(SCROLL_WAIT_MS)
 
             if (scroll_no + 1) % 25 == 0 or scroll_no == MAX_SCROLLS - 1:
                 save_data(collected_posts)
-                print(f"Scroll {scroll_no + 1}/{MAX_SCROLLS} | Unique Matched: {len(collected_posts)} | Height: {current_height}px", flush=True)
+                print(f"Scroll {scroll_no + 1}/{MAX_SCROLLS} | Matched: {len(collected_posts)} | Height: {current_height}px", flush=True)
 
         print(f"\n[+] Pass 1 complete. Extracting timestamps for {len(collected_posts)} matched posts...", flush=True)
         processed = 0

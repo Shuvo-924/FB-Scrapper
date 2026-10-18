@@ -34,8 +34,9 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install dependencies & Xvfb
         run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
@@ -55,17 +56,16 @@ jobs:
             echo "⚠ No FB_STORAGE_STATE secret detected. Running unauthenticated."
           fi
 
-      - name: Run Scraper
+      - name: Run Scraper in Xvfb
         env:
           CI: "true"
-          HEADLESS: "true"
-          PYTHONUNBUFFERED: "1"   # <--- Forces real-time log streaming
+          PYTHONUNBUFFERED: "1"
           PAGE_URL: ${{ github.event.inputs.page_url }}
           MAX_SCROLLS: ${{ github.event.inputs.max_scrolls }}
           KEYWORDS: ${{ github.event.inputs.keywords }}
           SCROLL_WAIT_MS: "2500"
         run: |
-          python -u scrapper.py   # -u ensures live unbuffered output
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python -u scrapper.py
 
       - name: Upload Scraped Output Artifacts
         uses: actions/upload-artifact@v4
