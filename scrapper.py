@@ -414,8 +414,6 @@ def main():
     collected_posts = {}
 
     with sync_playwright() as p:
-        storage_state = "storage_state.json" if Path("storage_state.json").exists() else None
-
         browser = p.chromium.launch(
             headless=False,
             args=[
@@ -431,9 +429,6 @@ def main():
             "viewport": {"width": 1920, "height": 1080},
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
-        if storage_state:
-            print("[+] Found storage_state.json. Applying cookies...", flush=True)
-            context_kwargs["storage_state"] = storage_state
 
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
