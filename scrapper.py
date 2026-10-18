@@ -214,76 +214,87 @@ FB_PASSWORD = os.getenv("FB_PASSWORD", "")
 
 
 def handle_login_if_needed(page, context):
-    """Detects Facebook login wall, inputs credentials, and waits for 2FA phone approval."""
-    email_input = page.locator('input[name="email"]').first
-    pass_input = page.locator('input[name="pass"]').first
+    """Navigates to login, fills credentials, and waits for 2FA phone approval."""
+    print("[+] Checking Facebook authentication status...", flush=True)
+    page.goto("https://www.facebook.com/login/", wait_until="domcontentloaded", timeout=45000)
 
-    # 1. Check if login fields are visible
-    is_login_page = False
+    # 1. Check if we are already logged in or if login inputs exist
     try:
-        if email_input.is_visible(timeout=3000) and pass_input.is_visible(timeout=3000):
-            is_login_page = True
+        page.wait_for_selector('input[name="email"]', timeout=6000)
+    except Exception:
+        # If email field didn't appear and we're not on a login/checkpoint page, we are logged in
+        if not any(k in page.url for k in ["login", "checkpoint", "auth_platform"]):
+            print("[+] Already logged into Facebook! Skipping login.", flush=True)
+            return
+
+    print("\n[!] Facebook Login Form active.", flush=True)
+
+    if not FB_EMAIL or not FB_PASSWORD:
+        print("[!] ERROR: FB_EMAIL or FB_PASSWORD not set!", flush=True)
+        return
+
+    # 2. Fill credentials and submit
+    print("[+] Submitting login credentials...", flush=True)
+    page.locator('input[name="email"]').fill(FB_EMAIL)
+    page.wait_for_timeout(400)
+    page.locator('input[name="pass"]').fill(FB_PASSWORD)
+    page.wait_for_timeout(400)
+    page.locator('input[name="pass"]').press("Enter")
+
+    # 3. Wait for Facebook to navigate AWAY from /login/
+    print("[+] Credentials submitted. Waiting for page transition...", flush=True)
+    try:
+        # Wait up to 15s for the URL to leave the /login page
+        page.wait_for_url(lambda u: "/login" not in u, timeout=15000)
     except Exception:
         pass
 
-    if not is_login_page:
-        return
-
-    print("\n[!] Facebook Login Form detected.", flush=True)
-
-    if not FB_EMAIL or not FB_PASSWORD:
-        print("[!] ERROR: FB_EMAIL or FB_PASSWORD environment variables are not set!", flush=True)
-        return
-
-    print("[+] Entering credentials...", flush=True)
-    email_input.fill(FB_EMAIL)
-    page.wait_for_timeout(500)
-    pass_input.fill(FB_PASSWORD)
-    page.wait_for_timeout(500)
-    pass_input.press("Enter")
-
-    # 2. Wait for submission response
-    page.wait_for_timeout(4000)
-
-    # 3. Check for 2FA / Device Approval screen ("Check your other device")
-    print("[+] Checking for 2FA / Device Approval prompt...", flush=True)
+    # 4. Handle 2FA / Device Approval ("Check your other device")
     start_time = time.time()
-    max_wait_seconds = 200  # Give you ~3.5 minutes to tap on your phone
-
+    max_wait_seconds = 240  # 4 minutes to tap on your phone
     logged_code = False
+
+    print("[+] Waiting for 2FA / Device Approval...", flush=True)
 
     while time.time() - start_time < max_wait_seconds:
         current_url = page.url
-        body_text = page.locator("body").inner_text()
 
-        # Extract and print the number to tap (e.g. 71) from the page
-        if not logged_code:
-            match = re.search(r"tap\s*(\d+)\s*to verify", body_text, re.I)
-            if match:
-                code = match.group(1)
-                print("\n" + "=" * 50, flush=True)
-                print(f"👉 ACTION REQUIRED ON YOUR PHONE: Tap [{code}] on Facebook notification!", flush=True)
-                print("=" * 50 + "\n", flush=True)
-                logged_code = True
-            elif "Check your other device" in body_text:
-                print("[!] 2FA Screen active. Waiting for you to approve on your device...", flush=True)
-                logged_code = True
+        # Check if 2FA screen is showing
+        if any(marker in current_url for marker in ["auth_platform", "checkpoint"]):
+            try:
+                body_text = page.locator("body").inner_text()
+                if not logged_code:
+                    match = re.search(r"tap\s*(\d+)\s*to verify", body_text, re.I)
+                    if match:
+                        code = match.group(1)
+                        print("\n" + "=" * 55, flush=True)
+                        print(f"👉 ACTION REQUIRED ON YOUR PHONE: Tap [{code}] on Facebook!", flush=True)
+                        print("=" * 55 + "\n", flush=True)
+                        logged_code = True
+                    elif "Check your other device" in body_text:
+                        print("[!] 2FA screen active. Approve the notification on your phone...", flush=True)
+                        logged_code = True
+            except Exception:
+                pass
+            
+            # Still on 2FA page -> continue waiting
+            page.wait_for_timeout(2000)
+            continue
 
-        # Check if login is successful (redirected away from auth/login pages)
-        is_still_auth = any(marker in current_url for marker in ["auth_platform", "login", "checkpoint"])
-        if not is_still_auth and ("facebook.com" in current_url):
+        # If the URL is no longer in login/checkpoint/auth_platform, login was approved!
+        if "facebook.com" in current_url and not any(m in current_url for m in ["login", "checkpoint", "auth_platform"]):
             print("\n[✓] Login successfully approved!", flush=True)
-            # Save the approved session to storage_state.json so future runs stay logged in
+            page.wait_for_timeout(3000)
             try:
                 context.storage_state(path="storage_state.json")
-                print("[+] Saved fresh session to storage_state.json", flush=True)
+                print("[+] Saved session cookies to storage_state.json", flush=True)
             except Exception as e:
                 print(f"[!] Could not save storage_state: {e}", flush=True)
             return
 
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2000)
 
-    print("[!] Timed out waiting for phone approval. Proceeding anyway...", flush=True)
+    print("[!] Timed out waiting for 2FA approval.", flush=True)
 
 def main():
     collected_posts = {}
