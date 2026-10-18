@@ -10,7 +10,7 @@ on:
       keywords:
         description: 'Comma-separated keywords to filter'
         required: true
-        default: 'ঢাকা,সিলেট,কমলাপুর'
+        default: 'ঢাকা,সিলেট,কমলাপুর,শায়েস্তাগঞ্জ,dhaka,sylhet,shaistaganj,kamalapur,kamlapur'
       page_url:
         description: 'Facebook page URL'
         required: true
