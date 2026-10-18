@@ -307,9 +307,9 @@ def main():
             "viewport": {"width": 1920, "height": 1080},
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
-        if storage_state:
-            print("[+] Using stored session cookies (storage_state.json)", flush=True)
-            context_kwargs["storage_state"] = storage_state
+        # if storage_state:
+        #     print("[+] Using stored session cookies (storage_state.json)", flush=True)
+        #     context_kwargs["storage_state"] = storage_state
 
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
