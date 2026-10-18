@@ -540,23 +540,55 @@ def main():
                 except Exception:
                     continue
 
-            # Verify scroll progression
-            current_height = page.evaluate("document.body.scrollHeight")
+# -------------------------------------------------------------
+            # ADAPTIVE SCROLL & STALL RECOVERY
+            # -------------------------------------------------------------
+            current_height = page.evaluate("() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)")
+
             if current_height == last_height:
                 stalled_count += 1
-                if stalled_count >= 4:
-                    print(f"  [!] Feed stalled at {current_height}px. Nudging down...", flush=True)
+                
+                # Level 1: Press Escape to close any accidentally opened video/photo dialogs
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+
+                if stalled_count >= 2:
+                    print(f"  [!] Feed stalled at {current_height}px. Recovering trigger...", flush=True)
+
+                    # Level 2: Scroll UP 800px, pause, then scroll back to bottom
+                    # (This is mandatory to re-trigger Facebook's IntersectionObserver sentinel)
+                    page.evaluate("window.scrollBy(0, -800)")
+                    page.wait_for_timeout(800)
+                    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+                    page.wait_for_timeout(1200)
+
+                    # Refocus on the feed and nudge
+                    try:
+                        feed = page.locator('div[role="feed"]').first
+                        if feed.is_visible():
+                            feed.click(position={"x": 50, "y": 50}, force=True)
+                    except Exception:
+                        pass
+
                     page.keyboard.press("PageDown")
                     page.wait_for_timeout(1000)
-                    page.keyboard.press("End")
-                    page.wait_for_timeout(1500)
-                    if stalled_count == 12:
-                        page.screenshot(path="output/debug_feed.png")
+
+                if stalled_count == 8:
+                    # Save a screenshot to the output folder so you can see why it stopped
+                    page.screenshot(path="output/stalled_11339px.png")
+                    print("  [📸] Saved stall screenshot to output/stalled_11339px.png", flush=True)
+
+                if stalled_count >= 15:
+                    # Level 3: Aggressive scroll to trigger bottom sentinel
+                    print("  [!] Hard reset: dispatching wheel event to bottom...", flush=True)
+                    page.mouse.wheel(0, 3000)
+                    page.wait_for_timeout(2500)
             else:
                 stalled_count = 0
                 last_height = current_height
 
-            page.keyboard.press("PageDown")
+            # Standard scroll downward
+            page.evaluate("window.scrollBy(0, Math.floor(window.innerHeight * 0.9))")
             page.wait_for_timeout(SCROLL_WAIT_MS)
 
             if (scroll_no + 1) % 25 == 0 or scroll_no == MAX_SCROLLS - 1:
