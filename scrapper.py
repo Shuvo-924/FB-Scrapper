@@ -17,7 +17,7 @@ from playwright.sync_api import sync_playwright
 PAGE_URL = os.getenv("PAGE_URL", "https://www.facebook.com/KalniBR")
 MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "1500"))
 SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "2500"))
-KEYWORDS_ENV = os.getenv("KEYWORDS", "ঢাকা,সিলেট,কমলাপুর")
+KEYWORDS_ENV = os.getenv("KEYWORDS", "ঢাকা,সিলেট,কমলাপুর,শায়েস্তাগঞ্জ")
 KEYWORDS = [k.strip() for k in KEYWORDS_ENV.split(",") if k.strip()]
 
 OUTPUT_DIR = Path("output")
