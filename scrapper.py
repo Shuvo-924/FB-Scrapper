@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import socket
+import threading
 import subprocess
 import time
 import urllib.request
@@ -56,9 +57,9 @@ def is_port_listening(port, host="127.0.0.1", timeout=1.0):
 
 
 def start_live_handover() -> bool:
-    """Launches x11vnc, websockify (noVNC), and Cloudflare Tunnel for live browser access."""
+    """Launches x11vnc, websockify (noVNC), Cloudflare, and Pinggy dual tunnels."""
     try:
-        print("\n🌐 [LIVE HANDOVER] Initializing VNC & Cloudflare Tunnel...", flush=True)
+        print("\n🌐 [LIVE HANDOVER] Initializing VNC & Multi-Tunnel...", flush=True)
         subprocess.run(["pkill", "-9", "-f", "x11vnc"], capture_output=True)
         subprocess.run(["pkill", "-9", "-f", "websockify"], capture_output=True)
         time.sleep(1)
@@ -124,7 +125,7 @@ def start_live_handover() -> bool:
             print("❌ Timed out waiting for websockify.", flush=True)
             return False
 
-        # Prepare cloudflared binary
+        # --- 1. Cloudflare Tunnel Setup ---
         cloudflared_bin = shutil.which("cloudflared") or "/usr/local/bin/cloudflared"
         if not os.path.exists(cloudflared_bin):
             tmp_cf = "/tmp/cloudflared"
@@ -141,44 +142,80 @@ def start_live_handover() -> bool:
         if os.path.exists(cf_log_path):
             os.remove(cf_log_path)
 
+        # Use --protocol http2 to prevent UDP packet drops on GitHub Actions runners
         cf_proc = subprocess.Popen(
-            [cloudflared_bin, "tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:6080", "--logfile", cf_log_path],
+            [
+                cloudflared_bin, "tunnel", "--protocol", "http2",
+                "--no-autoupdate", "--url", "http://127.0.0.1:6080",
+                "--logfile", cf_log_path
+            ],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         TUNNEL_PROCESSES.append(cf_proc)
 
-        base_url = None
+        # --- 2. Fallback Pinggy Tunnel Setup (Bypasses Cloudflare ISP DNS blocks) ---
+        pinggy_base_url = None
+        pinggy_proc = subprocess.Popen(
+            [
+                "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ServerAliveInterval=30",
+                "-p", "443", "-R0:localhost:6080", "a.pinggy.io"
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        TUNNEL_PROCESSES.append(pinggy_proc)
+
+        def read_pinggy():
+            nonlocal pinggy_base_url
+            try:
+                for line in iter(pinggy_proc.stdout.readline, ''):
+                    match = re.search(r"https://[a-zA-Z0-9-]+\.a\.pinggy\.link", line)
+                    if match:
+                        pinggy_base_url = match.group(0)
+                        break
+            except Exception:
+                pass
+
+        t = threading.Thread(target=read_pinggy, daemon=True)
+        t.start()
+
+        # --- 3. Wait for URLs to be generated ---
+        cf_base_url = None
         start_wait = time.time()
-        print("⏳ Generating Cloudflare Tunnel URL...", flush=True)
+        print("⏳ Generating Live Access Tunnel URLs...", flush=True)
 
         while time.time() - start_wait < 35:
-            if os.path.exists(cf_log_path):
+            if not cf_base_url and os.path.exists(cf_log_path):
                 try:
                     with open(cf_log_path, "r", encoding="utf-8", errors="ignore") as f:
                         content = f.read()
                         match = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", content)
                         if match:
-                            base_url = match.group(0)
-                            break
+                            cf_base_url = match.group(0)
                 except Exception:
                     pass
+
+            # Once at least one tunnel is ready, we don't need to wait the full 35s
+            if cf_base_url or pinggy_base_url:
+                if (cf_base_url and pinggy_base_url) or (time.time() - start_wait > 15):
+                    break
             time.sleep(1)
 
-        if not base_url:
-            print("❌ Timed out waiting for Cloudflare Tunnel URL.", flush=True)
-            return False
-
-        tunnel_url = (
-            f"{base_url}/vnc.html?autoconnect=true&resize=scale&path=websockify&quality=5&compression=8&show_dot=true"
-        )
+        vnc_suffix = "/vnc.html?autoconnect=true&resize=scale&path=websockify&quality=5&compression=8&show_dot=true"
 
         print("\n" + "=" * 75, flush=True)
         print("🚨 ACTION REQUIRED: LIVE BROWSER ACCESS IS READY!", flush=True)
-        print(f"\n👉 OPEN THIS LINK IN YOUR BROWSER:\n   {tunnel_url}\n", flush=True)
-        print("Log in to Facebook, complete 2FA/approval, and navigate to KalniBR.", flush=True)
+
+        if cf_base_url:
+            print(f"\n👉 PRIMARY LINK (Cloudflare):\n   {cf_base_url}{vnc_suffix}", flush=True)
+        if pinggy_base_url:
+            print(f"\n👉 BACKUP LINK (Pinggy - if Cloudflare has DNS error):\n   {pinggy_base_url}{vnc_suffix}", flush=True)
+
+        print("\nLog in to Facebook, complete 2FA, and open KalniBR.", flush=True)
         print("Once the timeline is visible, the script will automatically take over!", flush=True)
         print("=" * 75 + "\n", flush=True)
-        return True
+
+        return bool(cf_base_url or pinggy_base_url)
+
     except Exception as e:
         print(f"❌ Error setting up live handover: {e}", flush=True)
         return False
