@@ -1,4 +1,5 @@
 .venv
+.env
 output
 storage_state.json
 facebook_profile

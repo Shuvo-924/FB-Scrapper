@@ -6,7 +6,7 @@ on:
       max_scrolls:
         description: 'Number of scrolls to perform'
         required: true
-        default: '1500'
+        default: '500'
       keywords:
         description: 'Comma-separated keywords to filter'
         required: true
