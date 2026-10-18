@@ -1,5 +1,6 @@
 import datetime
 import json
+import time
 import os
 import re
 from pathlib import Path
@@ -9,7 +10,7 @@ import pandas as pd
 from playwright.sync_api import sync_playwright
 
 PAGE_URL = os.getenv("PAGE_URL", "https://www.facebook.com/KalniBR")
-MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "1500"))
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "500"))
 SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "2500"))
 KEYWORDS_ENV = os.getenv("KEYWORDS", "ঢাকা,সিলেট,কমলাপুর")
 KEYWORDS = [k.strip() for k in KEYWORDS_ENV.split(",") if k.strip()]
@@ -208,6 +209,81 @@ def save_data(collected_posts: dict):
     df.to_json(OUTPUT_DIR / "posts.json", orient="records", force_ascii=False, indent=2)
     df.to_csv(OUTPUT_DIR / "posts.csv", index=False, encoding="utf-8-sig")
 
+FB_EMAIL = os.getenv("FB_EMAIL", "")
+FB_PASSWORD = os.getenv("FB_PASSWORD", "")
+
+
+def handle_login_if_needed(page, context):
+    """Detects Facebook login wall, inputs credentials, and waits for 2FA phone approval."""
+    email_input = page.locator('input[name="email"]').first
+    pass_input = page.locator('input[name="pass"]').first
+
+    # 1. Check if login fields are visible
+    is_login_page = False
+    try:
+        if email_input.is_visible(timeout=3000) and pass_input.is_visible(timeout=3000):
+            is_login_page = True
+    except Exception:
+        pass
+
+    if not is_login_page:
+        return
+
+    print("\n[!] Facebook Login Form detected.", flush=True)
+
+    if not FB_EMAIL or not FB_PASSWORD:
+        print("[!] ERROR: FB_EMAIL or FB_PASSWORD environment variables are not set!", flush=True)
+        return
+
+    print("[+] Entering credentials...", flush=True)
+    email_input.fill(FB_EMAIL)
+    page.wait_for_timeout(500)
+    pass_input.fill(FB_PASSWORD)
+    page.wait_for_timeout(500)
+    pass_input.press("Enter")
+
+    # 2. Wait for submission response
+    page.wait_for_timeout(4000)
+
+    # 3. Check for 2FA / Device Approval screen ("Check your other device")
+    print("[+] Checking for 2FA / Device Approval prompt...", flush=True)
+    start_time = time.time()
+    max_wait_seconds = 200  # Give you ~3.5 minutes to tap on your phone
+
+    logged_code = False
+
+    while time.time() - start_time < max_wait_seconds:
+        current_url = page.url
+        body_text = page.locator("body").inner_text()
+
+        # Extract and print the number to tap (e.g. 71) from the page
+        if not logged_code:
+            match = re.search(r"tap\s*(\d+)\s*to verify", body_text, re.I)
+            if match:
+                code = match.group(1)
+                print("\n" + "=" * 50, flush=True)
+                print(f"👉 ACTION REQUIRED ON YOUR PHONE: Tap [{code}] on Facebook notification!", flush=True)
+                print("=" * 50 + "\n", flush=True)
+                logged_code = True
+            elif "Check your other device" in body_text:
+                print("[!] 2FA Screen active. Waiting for you to approve on your device...", flush=True)
+                logged_code = True
+
+        # Check if login is successful (redirected away from auth/login pages)
+        is_still_auth = any(marker in current_url for marker in ["auth_platform", "login", "checkpoint"])
+        if not is_still_auth and ("facebook.com" in current_url):
+            print("\n[✓] Login successfully approved!", flush=True)
+            # Save the approved session to storage_state.json so future runs stay logged in
+            try:
+                context.storage_state(path="storage_state.json")
+                print("[+] Saved fresh session to storage_state.json", flush=True)
+            except Exception as e:
+                print(f"[!] Could not save storage_state: {e}", flush=True)
+            return
+
+        page.wait_for_timeout(3000)
+
+    print("[!] Timed out waiting for phone approval. Proceeding anyway...", flush=True)
 
 def main():
     collected_posts = {}
@@ -238,9 +314,14 @@ def main():
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
 
-        print(f"[+] Navigating to: {PAGE_URL} inside Xvfb display...", flush=True)
-        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(3000)
+        handle_login_if_needed(page, context)
+
+        # If it had to log in, re-navigate cleanly to the target group/page
+        if PAGE_URL not in page.url:
+            print(f"[+] Re-navigating to target: {PAGE_URL}", flush=True)
+            page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(3000)
+        # -----------------------------------------------------
 
         unlock_facebook_scroll(page)
         viewport_h = 1080

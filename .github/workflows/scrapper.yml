@@ -64,6 +64,8 @@ jobs:
           MAX_SCROLLS: ${{ github.event.inputs.max_scrolls }}
           KEYWORDS: ${{ github.event.inputs.keywords }}
           SCROLL_WAIT_MS: "2500"
+          FB_EMAIL: ${{ secrets.FB_EMAIL }}          # <--- Added
+          FB_PASSWORD: ${{ secrets.FB_PASSWORD }}    # <--- Added
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python -u scrapper.py
 
