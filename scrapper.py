@@ -434,16 +434,11 @@ def main():
         page = context.new_page()
 
         print(f"[+] Navigating to: {PAGE_URL}", flush=True)
-        page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+        page.goto("https://facebook.com", wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(4000)
 
-        # Detect if Facebook redirects to login, checkpoint, or blocks the feed
-        is_auth_page = any(m in page.url for m in ["login", "checkpoint", "auth_platform"])
-        cards = get_feed_cards(page)
 
-        if is_auth_page or cards.count() == 0:
-            print("[!] Facebook requires user interaction/login. Triggering Live Handover...", flush=True)
-            wait_for_user_handover(page, context, timeout_minutes=10)
+        wait_for_user_handover(page, context, timeout_minutes=10)
 
         # Ensure we are on KalniBR and the feed is visible
         if "KalniBR" not in page.url:
