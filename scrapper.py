@@ -91,10 +91,21 @@ def save_checkpoint_and_trigger(scrolls_completed: int, total_desired: int, last
 
 
 def handle_shutdown_signal(signum, frame):
-    print(f"\n[⚠️] Shutdown signal ({signum}) received! Flushing data...", flush=True)
+    """Triggered when you click 'Cancel run' in GitHub Actions."""
+    print(f"\n[⚠️] Manual cancellation signal ({signum}) received!", flush=True)
+
+    # Immediately delete trigger_next.txt so no new run is triggered
+    if os.path.exists("trigger_next.txt"):
+        try:
+            os.remove("trigger_next.txt")
+        except Exception:
+            pass
+
     save_data()
     cleanup_tunnels()
-    sys.exit(0)
+    print("[✓] Cleaned up and saved progress. Terminating permanently.", flush=True)
+    # Standard exit code for SIGINT/SIGTERM (informs GitHub that the job did NOT succeed)
+    sys.exit(128 + signum)
 
 
 signal.signal(signal.SIGTERM, handle_shutdown_signal)
