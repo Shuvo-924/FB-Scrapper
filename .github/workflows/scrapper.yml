@@ -10,7 +10,7 @@ on:
       keywords:
         description: 'Comma-separated keywords to filter'
         required: true
-        default: 'ঢাকা,সিলেট,কমলাপুর,শায়েস্তাগঞ্জ,dhaka,sylhet,shaistaganj,kamalapur,kamlapur'
+        default: 'ঢাকা,সিলেট,কমলাপুর,শায়েস্তাগঞ্জ,dhaka,sylhet,kamlapur,shaistaganj,kamalapur'
       page_url:
         description: 'Facebook page URL'
         required: true
@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   scrape:
@@ -34,7 +35,7 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies, Xvfb, VNC & noVNC
+      - name: Install dependencies & Xvfb
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb x11vnc novnc websockify
@@ -46,15 +47,14 @@ jobs:
           fi
           playwright install chromium --with-deps
 
-      - name: Restore Facebook Session (storage_state.json)
+      - name: Restore Facebook Session
         env:
           FB_STORAGE_STATE: ${{ secrets.FB_STORAGE_STATE }}
         run: |
-          if [ -n "$FB_STORAGE_STATE" ]; then
+          # If secrets exist and no local storage_state was committed, restore from secrets
+          if [ ! -f storage_state.json ] && [ -n "$FB_STORAGE_STATE" ]; then
             echo "$FB_STORAGE_STATE" > storage_state.json
-            echo "✓ Successfully restored storage_state.json from GitHub Secrets."
-          else
-            echo "⚠ No FB_STORAGE_STATE secret detected. Will request live login if prompted."
+            echo "✓ Restored storage_state.json from GitHub Secrets."
           fi
 
       - name: Run Scraper in Xvfb
@@ -65,6 +65,8 @@ jobs:
           MAX_SCROLLS: ${{ github.event.inputs.max_scrolls }}
           KEYWORDS: ${{ github.event.inputs.keywords }}
           SCROLL_WAIT_MS: "2500"
+          # Run for 325 minutes max (5.4 hrs), leaving 25 mins to save and chain next run
+          MAX_RUNTIME_MINUTES: "325"
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python -u scrapper.py
 
@@ -76,16 +78,32 @@ jobs:
           path: output/
           retention-days: 30
 
-      - name: Commit and Push Results to Repository
+      - name: Commit State & Push Data to Branch
         if: always()
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add output/
+          git add output/ storage_state.json checkpoint.json trigger_next.txt 2>/dev/null || true
           if git diff --staged --quiet; then
-            echo "No new data changes to commit."
+            echo "No new changes to commit."
           else
-            git commit -m "chore: auto-update scraped posts (Run #${{ github.run_number }}) [skip ci]"
+            git commit -m "chore: save scraping checkpoint & session [skip ci]"
             git pull --rebase origin ${{ github.ref_name }} || true
             git push origin HEAD:${{ github.ref_name }}
+          fi
+
+      - name: Auto-Trigger Next GitHub Action
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f "trigger_next.txt" ]; then
+            REMAINING=$(cat trigger_next.txt)
+            echo "=========================================================="
+            echo "🔄 Target not reached. Auto-chaining next run for $REMAINING scrolls..."
+            echo "=========================================================="
+            rm -f trigger_next.txt
+            gh workflow run scraper.yml -f max_scrolls="$REMAINING" -f keywords="${{ github.event.inputs.keywords }}" -f page_url="${{ github.event.inputs.page_url }}"
+          else
+            echo "✓ Task completed or no continuation needed."
           fi
