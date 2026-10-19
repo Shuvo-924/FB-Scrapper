@@ -47,11 +47,15 @@ jobs:
           fi
           playwright install chromium --with-deps
 
+      - name: Clean stale trigger file
+        run: |
+          # Ensure no leftover trigger from an earlier cancelled run exists
+          rm -f trigger_next.txt
+
       - name: Restore Facebook Session
         env:
           FB_STORAGE_STATE: ${{ secrets.FB_STORAGE_STATE }}
         run: |
-          # If secrets exist and no local storage_state was committed, restore from secrets
           if [ ! -f storage_state.json ] && [ -n "$FB_STORAGE_STATE" ]; then
             echo "$FB_STORAGE_STATE" > storage_state.json
             echo "✓ Restored storage_state.json from GitHub Secrets."
@@ -65,7 +69,6 @@ jobs:
           MAX_SCROLLS: ${{ github.event.inputs.max_scrolls }}
           KEYWORDS: ${{ github.event.inputs.keywords }}
           SCROLL_WAIT_MS: "2500"
-          # Run for 325 minutes max (5.4 hrs), leaving 25 mins to save and chain next run
           MAX_RUNTIME_MINUTES: "325"
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python -u scrapper.py
@@ -83,7 +86,8 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add output/ storage_state.json checkpoint.json trigger_next.txt 2>/dev/null || true
+          # Only commit data and session. NEVER commit trigger_next.txt!
+          git add output/ storage_state.json checkpoint.json 2>/dev/null || true
           if git diff --staged --quiet; then
             echo "No new changes to commit."
           else
@@ -92,18 +96,21 @@ jobs:
             git push origin HEAD:${{ github.ref_name }}
           fi
 
+      # -------------------------------------------------------------
+      # ONLY auto-trigger if scraper completed cleanly (SKIPPED IF CANCELLED)
+      # -------------------------------------------------------------
       - name: Auto-Trigger Next GitHub Action
-        if: always()
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f "trigger_next.txt" ]; then
             REMAINING=$(cat trigger_next.txt)
             echo "=========================================================="
-            echo "🔄 Target not reached. Auto-chaining next run for $REMAINING scrolls..."
+            echo "🔄 Time budget reached. Auto-chaining next run for $REMAINING scrolls..."
             echo "=========================================================="
             rm -f trigger_next.txt
             gh workflow run scrapper.yml -f max_scrolls="$REMAINING" -f keywords="${{ github.event.inputs.keywords }}" -f page_url="${{ github.event.inputs.page_url }}"
           else
-            echo "✓ Task completed or no continuation needed."
+            echo "✓ Finished target scrolls or stopped normally."
           fi
