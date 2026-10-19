@@ -103,7 +103,7 @@ jobs:
             echo "🔄 Target not reached. Auto-chaining next run for $REMAINING scrolls..."
             echo "=========================================================="
             rm -f trigger_next.txt
-            gh workflow run scraper.yml -f max_scrolls="$REMAINING" -f keywords="${{ github.event.inputs.keywords }}" -f page_url="${{ github.event.inputs.page_url }}"
+            gh workflow run scrapper.yml -f max_scrolls="$REMAINING" -f keywords="${{ github.event.inputs.keywords }}" -f page_url="${{ github.event.inputs.page_url }}"
           else
             echo "✓ Task completed or no continuation needed."
           fi
