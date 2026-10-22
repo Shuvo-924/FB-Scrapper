@@ -30,8 +30,128 @@ CACHE_FILE = OUT / "extraction_cache.json"
 
 BN_TO_EN = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
 
+
+def _nm(s):
+    s = unicodedata.normalize("NFC", str(s)).lower()
+    return re.sub(r"[\s#_\-\u200c\u200d]", "", s)
+
+
 # =========================================================================
-# 1. OFFICIAL TIMETABLE & DISTANCE PROGRESSION (MINUTES FROM MIDNIGHT)
+# BANGLADESH RAILWAY INTERCITY TRAIN & DRIVER CANONICAL MAPPINGS
+# =========================================================================
+TRAIN_ALIASES = {
+    "Subarna Express": ["subarna", "সুবর্ণা", "সুবর্ন", "701", "702"],
+    "Mahanagar Express": ["mahanagar", "মহানগর", "মহানগর প্রভাতী", "মহানগর গোধূলী", "703", "704", "721", "722"],
+    "Ekota Express": ["ekota", "একতা", "705", "706"],
+    "Tista Express": ["tista", "তিস্তা", "707", "708"],
+    "Parabat Express": ["parabat", "পারাবত", "পারাবাত", "709", "710"],
+    "Upukol Express": ["upukol", "upakul", "উপকূল", "উপকুল", "711", "712"],
+    "Korotoa Express": ["korotoa", "করতোয়া", "করতোয়া", "713", "714"],
+    "Jayantika Express": ["jayantika", "joyantika", "জয়ন্তিকা", "জয়ন্তিকা", "717", "718"],
+    "Paharika Express": ["paharika", "পাহাড়িকা", "পাহাড়িকা", "পাহারিকা", "719", "720"],
+    "Udyan Express": ["udyan", "udayan", "উদয়ন", "উদয়ন", "উদ্বয়ন", "723", "724"],
+    "Meghna Express": ["meghna", "মেঘনা", "729", "730"],
+    "Turna Express": ["turna", "তূর্ণা", "তুর্না", "741", "742"],
+    "Agnibina Express": ["agnibina", "অগ্নিবীণা", "অগ্নিবিনা", "735", "736"],
+    "Egarosindhur Provati": ["egarosindhur provati", "egaroshindhur probhati", "এগারসিন্ধুর প্রভাতী", "এগারসিন্দুর প্রভাতী", "737"],
+    "Upoban Express": ["upoban", "upaban", "উপবন", "উপবান", "739", "740"],
+    "Brahmaputra": ["brahmaputra", "bhramanputra", "ব্রহ্মপুত্র", "743", "744"],
+    "Jamuna Express": ["jamuna", "যমুনা", "745", "746"],
+    "Egarosindhur Godhuli": ["egarosindhur godhuli", "egaroshindhur godhuli", "এগারসিন্ধুর গোধূলী", "এগারসিন্দুর গোধূলী", "749", "750"],
+    "Lalmoni Express": ["lalmoni", "লালমনি", "751", "752"],
+    "Drutojan Express": ["drutojan", "drutajan", "দ্রুতযান", "757", "758"],
+    "Dolonchapa Express": ["dolonchapa", "দোলনচাঁপা", "দোলনচাপা", "767", "768"],
+    "Rangpur Express": ["rangpur", "রংপুর", "771", "772"],
+    "Kalani Express": ["kalani", "kalni", "কালনী", "কালনি", "773", "774"],
+    "Haor Express": ["haor", "হাওর", "হাওড়", "777", "778"],
+    "Kishoreganj Express": ["kishoreganj", "কিশোরগঞ্জ", "781", "782"],
+    "Bijoy Express": ["bijoy", "বিজয়", "বিজয়", "785", "786"],
+    "Sonar Bangla Express": ["sonar bangla", "সোনার বাংলা", "787", "788"],
+    "Mohanganj Express": ["mohanganj", "মোহনগঞ্জ", "789", "790"],
+    "Kapotaksha Express": ["kapotaksha", "কপোতাক্ষ", "715", "716"],
+    "Sundarban Express": ["sundarban", "সুন্দরবন", "725", "726"],
+    "Rupsha Express": ["rupsha", "রূপসা", "রুপসা", "727", "728"],
+    "Barendra Express": ["barendra", "বরেন্দ্র", "731", "732"],
+    "Titumir Express": ["titumir", "তিতুমীর", "তিতুমির", "733", "734"],
+    "Simanta Express": ["simanta", "সীমান্ত", "747", "748"],
+    "Silkcity Express": ["silkcity", "silk city", "সিল্কসিটি", "সিল্ক সিটি", "753", "754"],
+    "Madhumati Express": ["madhumati", "মধুমতি", "755", "756"],
+    "Padma Express": ["padma", "পদ্মা", "759", "760"],
+    "Sagardari Express": ["sagardari", "সাগঁড়দাড়ী", "সাগরদাঁড়ি", "সাগরদাড়ি", "761", "762"],
+    "Chittra Express": ["chittra", "chitra", "চিত্রা", "763", "764"],
+    "Nilsagar Express": ["nilsagar", "নীলসাগর", "নীল সাগর", "765", "766"],
+    "Dhumketue Express": ["dhumketue", "dhumketu", "ধূমকেতু", "ধুমকেতু", "769", "770"],
+    "Sirajgonj Express": ["sirajgonj", "sirajganj", "সিরাজগঞ্জ", "775", "776"],
+    "Kalukhali Vatiapara Express": ["kalukhali", "কালুখালী", "ভাটিয়াপাড়া", "779", "780"],
+    "Faridpur Express": ["faridpur", "ফরিদপুর", "783", "784"],
+    "Banalata Express": ["banalata", "বনলতা", "791", "792"],
+    "Tungipara Express": ["tungipara", "টুঙ্গিপাড়া", "টুঙ্গিপাড়া", "783", "784"],
+    "Panchagarh Express": ["panchagarh", "পঞ্চগড়", "পঞ্চগড়", "793", "794"],
+    "Benapole Express": ["benapole", "বেনাপোল", "795", "796"],
+    "Jamalpur Express": ["jamalpur", "জামালপুর", "799", "800"],
+    "Chattala Express": ["chattala", "চট্টলা", "চট্টলা এক্সপ্রেস", "67", "68"],
+}
+_TRAIN_MAP = {c: [_nm(a) for a in al] for c, al in TRAIN_ALIASES.items()}
+
+
+def normalize_train_name(raw: str) -> Optional[str]:
+    if not raw:
+        return None
+    r = _nm(str(raw))
+    for canon, aliases in _TRAIN_MAP.items():
+        if any(a in r for a in aliases):
+            return canon
+    return str(raw).strip()
+
+
+def normalize_train_list(trains_str: Optional[str]) -> Optional[str]:
+    if not trains_str:
+        return None
+    raw_parts = re.split(r"[,;।\n]+|\b(?:and|with)\b|(?:\s*এর\s*সাথে\s*)", str(trains_str), flags=re.I)
+    normalized = []
+    for part in raw_parts:
+        p = part.strip()
+        if not p:
+            continue
+        norm = normalize_train_name(p)
+        if norm and norm not in normalized:
+            normalized.append(norm)
+    return "; ".join(normalized) if normalized else None
+
+
+# Driver (Loco Master / LM) Canonical Mapping
+DRIVER_ALIASES = {
+    "Hemayet": ["হেমায়েত", "হেমায়েত", "hemayet"],
+    "Nazrul Islam": ["নজরুল ইসলাম", "নজরুল", "nazrul islam", "nazrul"],
+    "Rumu Das": ["রুমু দাস", "রুমু", "rumu das", "rumu"],
+    "Saral Chandra Sourav": ["সরল চন্দ্র", "সরল চন্দ্র সৌরভ", "saral chandra", "saral chandra sourav"],
+    "Sohel": ["সোহেল", "সুহেল", "sohel", "suhel"],
+    "Shanto": ["শান্ত", "shanto"],
+    "Fayaz": ["ফায়াজ", "ফায়াজ", "fayaz"],
+    "Saiful Haque": ["সাইফুল হক", "সাইফুল", "saiful haque", "saiful"],
+    "Roman Ahmed": ["রোমান আহমেদ", "রোমান", "roman ahmed", "roman"],
+    "Das Mitu": ["দাস মিতু", "মিতু দাস", "das mitu", "mitu das"],
+}
+
+
+def normalize_driver_name(raw: Optional[str]) -> Optional[str]:
+    """Cleans Bengali honorifics and standardizes LM driver names."""
+    if not raw:
+        return None
+    text = str(raw).strip()
+    # Strip honorifics: ভাই, দাদা, এলএম, চালক, সাহেব, জনাব, Bhai, Dada, LM
+    cleaned = re.sub(r"\b(ভাই|দাদা|সাহেব|এলএম|এএলএম|চালক|জনাব|bhai|dada|lm|alm|driver)\b", "", text, flags=re.I).strip()
+    cleaned = re.sub(r"[\s_]+", " ", cleaned)
+    c_low = _nm(cleaned)
+
+    for canon, aliases in DRIVER_ALIASES.items():
+        if any(_nm(a) in c_low for a in aliases):
+            return canon
+    return cleaned.title() if len(cleaned) > 2 else text.title()
+
+
+# =========================================================================
+# TIMETABLES & PROGRESSION
 # =========================================================================
 def _hm(s):
     h, m = s.split(":")
@@ -64,12 +184,6 @@ T774 = _build([
 
 TT = {"773": {e["station"]: e for e in T773}, "774": {e["station"]: e for e in T774}}
 ROUTE = {"773": [e["station"] for e in T773], "774": [e["station"] for e in T774]}
-
-
-def _nm(s):
-    s = unicodedata.normalize("NFC", str(s)).lower()
-    return re.sub(r"[\s#_\-\u200c\u200d]", "", s)
-
 
 STATION_ALIASES = {
     "Dhaka": ["dhaka", "ঢাকা", "কমলাপুর", "kamalapur", "kamlapur", "রাজধানী"],
@@ -106,21 +220,33 @@ def canonical_station(raw):
     return None
 
 
-def classify_locomotive(loco_str: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+def classify_locomotive(loco_str: Optional[str]) -> Tuple[Optional[str], Optional[str], int]:
+    """
+    Locomotive engine classification for Bangladesh Railway:
+    - Powerful engines: Serial >= 2900 (Class 2900 and Class 3000/3100).
+    - Weak/Aging engines: Serial < 2900 (Class 2600 1500 HP).
+    Returns: (loco_number, loco_class, is_powerful)
+    """
     if not loco_str:
-        return None, None
-    m = re.search(r"\b(26\d{2}|29\d{2}|30\d{2}|31\d{2}|27\d{2})\b", str(loco_str))
+        return None, "Unknown", 0
+    m = re.search(r"\b(\d{4})\b", str(loco_str).translate(BN_TO_EN))
     if not m:
-        return str(loco_str).strip(), "Unknown"
-    num = m.group(1)
-    prefix = num[:2]
-    if prefix == "26":
-        return num, "Class_2600_Aging"
-    elif prefix == "29":
-        return num, "Class_2900_Standard"
-    elif prefix in ("30", "31"):
-        return num, "Class_3000_Monster"
-    return num, "Other"
+        return str(loco_str).strip(), "Unknown", 0
+    num_str = m.group(1)
+    num_int = int(num_str)
+
+    is_powerful = 1 if num_int >= 2900 else 0
+
+    if num_int < 2700:
+        loco_cls = "Class_2600_Aging"
+    elif 2900 <= num_int < 3000:
+        loco_cls = "Class_2900_Powerful"
+    elif num_int >= 3000:
+        loco_cls = "Class_3000_Monster"
+    else:
+        loco_cls = "Class_Other"
+
+    return num_str, loco_cls, is_powerful
 
 
 MONTHS = {m: i for i, m in enumerate(
@@ -190,11 +316,11 @@ def mm_to_hhmm(m):
 
 
 # =========================================================================
-# 2. GEMINI EXTRACTION WITH OPERATIONAL GROUNDING
+# GEMINI EXTRACTION
 # =========================================================================
 class Obs(BaseModel):
     station: str
-    event: str  # arrival | departure | pass | halt | approaching | waiting
+    event: str
     time_text: Optional[str] = None
     is_forecast: Optional[bool] = None
 
@@ -225,8 +351,15 @@ class PostExtraction(BaseModel):
 
 SYSTEM_PROMPT = """
 You extract railway operational metrics from informal Bengali Facebook admin posts about Kalni Express (Trains 773 & 774 on the Dhaka-Sylhet corridor).
-Extract station events, clock times, crossing halts, engine numbers, and driver names accurately.
-If not mentioned in the post, leave as null. Never hallucinate.
+
+OPERATIONAL INDEPENDENCE RULES:
+1. LOCOMOTIVES:
+   - Posts use shorthand like "2936/774*2709/781". This means Loco 2936 is on 774, and 2709 is on 781.
+   - ONLY extract the locomotive assigned to Kalni Express (773 or 774). IGNORE other trains' locos!
+2. DRIVERS:
+   - 773 and 774 on the SAME date have DIFFERENT drivers and DIFFERENT engines. Never mix them up.
+   - Extract the driver name for the relevant Kalni trip. If a crew change or relief driver is mentioned, extract it.
+   - Ignore drivers of other crossing trains.
 """
 
 
@@ -312,6 +445,32 @@ def assign_train(station, event, actual, hint_train, hint_dir):
     return min(cands, key=lambda c: abs(c[2])) if cands else None
 
 
+def extract_kalni_locomotive_from_text(raw_text: str) -> Tuple[Optional[str], Optional[str]]:
+    """Deterministically extracts locomotive assigned specifically to Kalni (773 or 774)."""
+    if not raw_text:
+        return None, None
+    t = raw_text.translate(BN_TO_EN)
+
+    # Shorthand: [4-digit Loco]/[773 or 774]
+    m1 = re.search(r"\b([23]\d{3})\s*/\s*(773|774)\b", t)
+    if m1:
+        return m1.group(2), m1.group(1)
+
+    # Reverse Shorthand: [773 or 774]/[4-digit Loco]
+    m2 = re.search(r"\b(773|774)\s*/\s*([23]\d{3})\b", t)
+    if m2:
+        return m2.group(1), m2.group(2)
+
+    # Explicit: 773/774 ... engine/loco 29xx
+    for tr in ["773", "774"]:
+        if tr in t:
+            m3 = re.search(rf"{tr}.*?(?:ইঞ্জিন|লোকো|loco|engine|with|উইথ)?\s*[:=\-]?\s*([23]\d{{3}})", t, re.I | re.S)
+            if m3:
+                return tr, m3.group(1)
+
+    return None, None
+
+
 def build_events(posts, extractions):
     obs_by_j = defaultdict(list)
     meta_by_j = defaultdict(list)
@@ -323,10 +482,22 @@ def build_events(posts, extractions):
         if not post_dt:
             continue
 
+        raw_post_text = p.get("text", "")
         hint_t = next((t for t in ("773", "774") if t in str(ex.get("train_number") or "").translate(BN_TO_EN)), None)
         hint_d = (ex.get("direction") or "").strip().lower()
 
-        keys = []
+        # Parse locomotive deterministically
+        tr_detected, loco_detected = extract_kalni_locomotive_from_text(raw_post_text)
+        loco_candidate = loco_detected or ex.get("locomotive_number")
+        loco_num, loco_cls, is_powerful = classify_locomotive(loco_candidate)
+
+        # Parse driver and clean honorifics
+        driver_norm = normalize_driver_name(ex.get("driver_name"))
+
+        target_train = tr_detected or hint_t or ("774" if 360 <= post_dt.hour * 60 + post_dt.minute < 810 else "773")
+        target_date = journey_date_for(target_train, post_dt)
+        key = (target_train, target_date)
+
         for o in ex.get("observations") or []:
             event = (o.get("event") or "").strip().lower()
             st = canonical_station(o.get("station"))
@@ -335,23 +506,22 @@ def build_events(posts, extractions):
                 continue
 
             actual = resolve_actual_dt(post_dt, *clock)
-            res = assign_train(st, event, actual, hint_t, hint_d)
+            res = assign_train(st, event, actual, target_train, hint_d)
             if not res:
                 continue
             train, jd, delay = res
             obs_by_j[(train, jd)].append({
                 "station": st, "event": event, "actual": actual, "delay": delay,
                 "post_dt": post_dt, "is_forecast": bool(o.get("is_forecast")), "url": p.get("url", ""),
+                "loco_num": loco_num, "driver": driver_norm,
             })
-            keys.append((train, jd))
 
-        loco_num, loco_cls = classify_locomotive(ex.get("locomotive_number"))
-        key = keys[0] if keys else (hint_t or ("774" if 360 <= post_dt.hour * 60 + post_dt.minute < 810 else "773"), journey_date_for(hint_t or "773", post_dt))
         meta_by_j[key].append({
             "post_dt": post_dt,
             "loco_num": loco_num,
             "loco_cls": loco_cls,
-            "driver": ex.get("driver_name"),
+            "is_powerful": is_powerful,
+            "driver": driver_norm,
             "platform": ex.get("platform_number"),
             "crossings": ex.get("crossings") or [],
             "priority_loss": bool(ex.get("priority_loss")),
@@ -365,7 +535,7 @@ def build_events(posts, extractions):
 
 
 # =========================================================================
-# 3. SYNTHESIS ENGINE (JOURNEYS & EVENTS RELATIONAL BUILDER)
+# SYNTHESIS ENGINE (JOURNEYS & EVENTS RELATIONAL BUILDER)
 # =========================================================================
 def pick_obs(obs, station, events):
     for want_fc in (False, True):
@@ -420,7 +590,13 @@ def resolve_departure(train, jd, obs, metas):
     if delay is None:
         delay, src = 0.0, "default_on_time"
 
-    return {"delay": delay, "source": src, "dt": base + timedelta(minutes=sched_dep + delay)}
+    dep_dt = base + timedelta(minutes=sched_dep + delay)
+    return {
+        "delay": delay,
+        "source": src,
+        "dt": dep_dt,
+        "time_24h": mm_to_hhmm(sched_dep + int(round(delay)))
+    }
 
 
 def process_full_dataset(json_file_path="output/posts.json"):
@@ -437,7 +613,7 @@ def process_full_dataset(json_file_path="output/posts.json"):
     obs_by_j, meta_by_j = build_events(posts, extractions)
 
     # ---------------------------------------------------------------------
-    # BUILD TABLE 1: events.csv (Checkpoint-Level Granular Data)
+    # BUILD TABLE 1: events.csv (Includes Locomotive & Driver at Event)
     # ---------------------------------------------------------------------
     event_rows = []
     for (t, jd), lst in obs_by_j.items():
@@ -447,7 +623,6 @@ def process_full_dataset(json_file_path="output/posts.json"):
         tt = TT[t]
         order = ROUTE[t]
 
-        # Sort chronologically
         lst_sorted = sorted(lst, key=lambda o: o["actual"])
 
         for o in lst_sorted:
@@ -456,7 +631,6 @@ def process_full_dataset(json_file_path="output/posts.json"):
             sched_m = sched_entry.get("arr_m") or sched_entry.get("dep_m")
             dist_km = sched_entry.get("dist_km")
 
-            # Match any crossings reported at this station
             matching_cross = []
             for m in meta_by_j.get((t, jd), []):
                 for c in m.get("crossings", []):
@@ -464,7 +638,8 @@ def process_full_dataset(json_file_path="output/posts.json"):
                     if c_st == st or c_st is None:
                         matching_cross.append(c)
 
-            c_trains = "; ".join(dict.fromkeys(c.get("other_train") for c in matching_cross if c.get("other_train"))) or None
+            c_trains_raw = "; ".join(dict.fromkeys(c.get("other_train") for c in matching_cross if c.get("other_train")))
+            c_trains_norm = normalize_train_list(c_trains_raw)
             c_wait = max([c.get("wait_minutes") for c in matching_cross if c.get("wait_minutes")], default=None)
 
             event_rows.append({
@@ -481,7 +656,9 @@ def process_full_dataset(json_file_path="output/posts.json"):
                 "delay_at_event_min": round(o["delay"]),
                 "waiting_time_min": c_wait,
                 "crossing_flag": int(bool(matching_cross or o["event"] == "halt")),
-                "crossing_train": c_trains,
+                "crossing_train": c_trains_norm,
+                "locomotive_number": o.get("loco_num"),
+                "train_driver": o.get("driver"),
                 "is_forecast": int(o["is_forecast"]),
                 "post_time_24h": o["post_dt"].strftime("%Y-%m-%d %H:%M"),
                 "post_url": o.get("url", ""),
@@ -493,7 +670,7 @@ def process_full_dataset(json_file_path="output/posts.json"):
     print(f"\n[✓] TABLE 1 GENERATED: {events_file} ({len(events_df)} station events)")
 
     # ---------------------------------------------------------------------
-    # BUILD TABLE 2: journeys.csv (Journey-Level Trip Master)
+    # BUILD TABLE 2: journeys.csv (100% Non-Null Guaranteed Target Estimation)
     # ---------------------------------------------------------------------
     journeys_dict = {}
     for (t, jd), obs in obs_by_j.items():
@@ -512,7 +689,9 @@ def process_full_dataset(json_file_path="output/posts.json"):
         base = day0(jd)
         j_id = f"{jd.isoformat()}_{train}"
 
-        delays = {origin: dep_info[(train, jd)]["delay"]}
+        dep_delay_val = dep_info[(train, jd)]["delay"]
+        delays = {origin: dep_delay_val}
+
         for st in order[1:]:
             o = pick_obs(obs, st, {"arrival", "pass", "halt", "departure"})
             if o and not o["is_forecast"]:
@@ -523,78 +702,123 @@ def process_full_dataset(json_file_path="output/posts.json"):
         dest_delay_ground = max(0.0, dest_o["delay"]) if (dest_o and not dest_o["is_forecast"]) else None
         dest_time_ground = t24(dest_o["actual"]) if (dest_o and not dest_o["is_forecast"]) else None
 
-        # Imputed destination arrival (for full sample models)
-        dest_delay_imputed = dest_delay_ground
-        dest_source = "direct_post"
+        # -----------------------------------------------------------------
+        # GUARANTEED ZERO-BLANK DESTINATION ARRIVAL ESTIMATION
+        # -----------------------------------------------------------------
+        dest_delay_imputed = None
+        dest_time_final = None
+        dest_source = None
         label_weight = 1.0
 
-        if dest_delay_imputed is None:
-            near = nearest_station(train, dest, delays)
-            if near and near[0][0] <= 180:
-                dest_delay_imputed = max(0.0, near[2])
-                dest_source = f"estimated_from_{near[1]}"
-                label_weight = 0.50
-            elif train == "774":
+        if dest_delay_ground is not None:
+            dest_delay_imputed = dest_delay_ground
+            dest_time_final = dest_time_ground
+            dest_source = "direct_post"
+            label_weight = 1.0
+        else:
+            rake_inferred = False
+            if train == "774":
                 d773 = dep_ctx.get(jd)
-                if d773 and d773["delay"] is not None and d773["delay"] >= 45 and d773["source"] != "inferred_on_time":
+                if d773 and d773.get("delay") and d773["delay"] >= 30 and d773["source"] != "inferred_on_time":
                     dest_delay_imputed = max(0.0, d773["delay"] - 15)
                     dest_source = "inferred_from_next_departure_rake"
-                    label_weight = 0.25
-            elif near:
-                dest_delay_imputed = max(0.0, near[2])
-                dest_source = f"estimated_from_{near[1]}"
-                label_weight = 0.35
+                    label_weight = 0.35
+                    rake_inferred = True
 
-        # Shaistaganj Checkpoint
+            if not rake_inferred:
+                near = nearest_station(train, dest, delays)
+                if near and near[2] is not None:
+                    dest_delay_imputed = max(0.0, near[2])
+                    dest_source = f"estimated_from_{near[1]}"
+                    label_weight = 0.60 if near[0][0] <= 180 else 0.40
+                elif dep_delay_val is not None:
+                    dest_delay_imputed = max(0.0, dep_delay_val)
+                    dest_source = "estimated_from_departure_delay"
+                    label_weight = 0.30
+                else:
+                    dest_delay_imputed = 0.0
+                    dest_source = "scheduled_timetable_default"
+                    label_weight = 0.20
+
+            sched_arr_m = tt[dest]["arr_m"]
+            dest_time_final = mm_to_hhmm(sched_arr_m + int(round(dest_delay_imputed)))
+
+        # -----------------------------------------------------------------
+        # GUARANTEED ZERO-BLANK SHAISTAGANJ ESTIMATION
+        # -----------------------------------------------------------------
         sh_o = pick_obs(obs, "Shaistaganj", {"arrival", "pass", "halt", "departure"})
-        sh_delay = max(0.0, sh_o["delay"]) if sh_o else None
-        sh_time = t24(sh_o["actual"]) if sh_o else None
-        sh_source = "direct_post" if sh_o else "none"
+        sh_delay = None
+        sh_time = None
+        sh_source = "direct_post"
 
-        if sh_delay is None:
+        if sh_o and not sh_o["is_forecast"]:
+            sh_delay = max(0.0, sh_o["delay"])
+            sh_time = t24(sh_o["actual"])
+        else:
             near_sh = nearest_station(train, "Shaistaganj", delays)
-            if near_sh:
+            if near_sh and near_sh[2] is not None:
                 sh_delay = max(0.0, near_sh[2])
                 sh_time = mm_to_hhmm(tt["Shaistaganj"]["arr_m"] + int(round(sh_delay)))
                 sh_source = f"estimated_from_{near_sh[1]}"
+            else:
+                sh_delay = max(0.0, dep_delay_val) if dep_delay_val is not None else 0.0
+                sh_time = mm_to_hhmm(tt["Shaistaganj"]["arr_m"] + int(round(sh_delay)))
+                sh_source = "estimated_from_departure"
 
-        # Actual arrival time construction
-        dest_time_final = dest_time_ground or (mm_to_hhmm(tt[dest]["arr_m"] + int(round(dest_delay_imputed))) if dest_delay_imputed is not None else None)
-
-        # Meta attributes
+        # Metadata aggregations
         crossings = [c for m in metas for c in m["crossings"]]
         locos = [m["loco_num"] for m in metas if m["loco_num"]]
         classes = [m["loco_cls"] for m in metas if m["loco_cls"]]
-        drivers = [m["driver"] for m in metas if m["driver"]]
+        is_powerful = int(any(m.get("is_powerful", 0) for m in metas))
+
+        # Separate and aggregate drivers specifically for this journey
+        raw_drivers = [m["driver"] for m in metas if m["driver"]]
+        norm_drivers = []
+        for d in raw_drivers:
+            nd = normalize_driver_name(d)
+            if nd and nd not in norm_drivers:
+                norm_drivers.append(nd)
+
+        driver_str = "; ".join(norm_drivers) if norm_drivers else None
+        crew_change_flag = 1 if len(norm_drivers) > 1 else 0
+
         platforms = [m["platform"] for m in metas if m["platform"]]
         priority_loss = int(any(m["priority_loss"] for m in metas))
-        favored_trains = "; ".join(dict.fromkeys(m["favored_train"] for m in metas if m["favored_train"])) or None
+
+        raw_favored = "; ".join(dict.fromkeys(m["favored_train"] for m in metas if m["favored_train"]))
+        favored_trains = normalize_train_list(raw_favored)
+
+        raw_crossings = "; ".join(dict.fromkeys(c.get("other_train") for c in crossings if c.get("other_train")))
+        normalized_crossings = normalize_train_list(raw_crossings)
+
         engine_issue = int(any(m["engine_issue"] for m in metas))
 
         # Traffic conflicts from Kamalapur timetable
         day_name = jd.strftime("%A")
-        dep_delay_val = dep_info[(train, jd)]["delay"]
         is_parabat_running = int(day_name != "Tuesday")
 
         subarna_dep_clash = 0
         if train == "773" and day_name != "Friday":
             actual_dep_m = 895 + dep_delay_val
-            if 915 <= actual_dep_m <= 945:  # Clashes with Subarna 15:30 departure
+            if 915 <= actual_dep_m <= 945:
                 subarna_dep_clash = 1
 
         subarna_arr_clash = 0
         if train == "774" and day_name != "Friday" and dest_delay_imputed is not None:
             actual_arr_m = 775 + dest_delay_imputed
-            if abs(actual_arr_m - 760) <= 25:  # Within 25m of Subarna 12:40 arrival
+            if abs(actual_arr_m - 760) <= 25:
                 subarna_arr_clash = 1
 
         total_journey_time = None
-        if dep_info[(train, jd)]["dt"] and dest_time_final:
-            th, tm = map(int, dest_time_final.split(":"))
-            dest_m = th * 60 + tm
-            if train == "773" and th < 6:
-                dest_m += 1440
-            total_journey_time = dest_m - (sched_minutes(train, origin, "departure") + int(round(dep_delay_val)))
+        dep_time_str = dep_info[(train, jd)]["time_24h"]
+        if dep_time_str and dest_time_final:
+            dh, dm = map(int, dep_time_str.split(":"))
+            ah, am = map(int, dest_time_final.split(":"))
+            dep_m_tot = dh * 60 + dm
+            arr_m_tot = ah * 60 + am
+            if train == "773" and arr_m_tot < dep_m_tot:
+                arr_m_tot += 1440
+            total_journey_time = arr_m_tot - dep_m_tot
 
         journey_rows.append({
             "journey_id": j_id,
@@ -605,33 +829,38 @@ def process_full_dataset(json_file_path="output/posts.json"):
             "origin_station": origin,
             "destination_station": dest,
 
-            # Targets (Regression & Classification)
+            # Targets (Guaranteed non-null arrival times)
             "destination_delay_min_ground_truth": int(round(dest_delay_ground)) if dest_delay_ground is not None else None,
-            "destination_delay_min_imputed": int(round(dest_delay_imputed)) if dest_delay_imputed is not None else None,
+            "destination_delay_min_imputed": int(round(dest_delay_imputed)),
             "label_weight": label_weight,
             "is_destination_direct": int(dest_delay_ground is not None),
             "destination_arrival_time_24h": dest_time_final,
             "destination_source": dest_source,
 
-            # Departure Status
+            # Departure Status (Guaranteed non-null)
             "scheduled_departure_24h": mm_to_hhmm(tt[origin]["dep_m"]),
-            "departure_time_24h": t24(dep_info[(train, jd)]["dt"]),
+            "departure_time_24h": dep_time_str,
             "departure_delay_min": int(round(dep_delay_val)),
             "departure_source": dep_info[(train, jd)]["source"],
 
-            # Shaistaganj Status
+            # Shaistaganj Status (Guaranteed non-null)
             "scheduled_shaistaganj_arrival_24h": mm_to_hhmm(tt["Shaistaganj"]["arr_m"]),
             "shaistaganj_time_24h": sh_time,
-            "shaistaganj_delay_min": int(round(sh_delay)) if sh_delay is not None else None,
+            "shaistaganj_delay_min": int(round(sh_delay)),
             "shaistaganj_source": sh_source,
 
-            # Performance & Root Causes
+            # Performance & Engine Power Classification (>= 2900 is Powerful)
             "total_journey_time_min": total_journey_time,
             "locomotive_number": locos[0] if locos else None,
             "locomotive_class": classes[0] if classes else "Unknown",
-            "is_monster_engine_3000": int(classes and classes[0] == "Class_3000_Monster"),
+            "is_powerful_engine": is_powerful,
+            "is_monster_engine_3000": 1 if (classes and classes[0] == "Class_3000_Monster") else 0,
+            "is_weak_engine_2600": 1 if (classes and classes[0] == "Class_2600_Aging") else 0,
             "engine_trouble_reported": engine_issue,
-            "train_driver": drivers[0] if drivers else None,
+
+            # Driver (LM) Tracking & Crew Change Flag
+            "train_driver": driver_str,
+            "crew_change_flag": crew_change_flag,
             "platform_number": platforms[0] if platforms else None,
 
             # Operational Conflict Signals
@@ -641,7 +870,7 @@ def process_full_dataset(json_file_path="output/posts.json"):
             "priority_loss_flag": priority_loss,
             "favored_train": favored_trains,
             "crossing_count": len(crossings),
-            "crossing_trains": "; ".join(dict.fromkeys(c.get("other_train") for c in crossings if c.get("other_train"))) or None,
+            "crossing_trains": normalized_crossings,
 
             # Observation Volume
             "n_events_recorded": len(obs),
@@ -650,7 +879,7 @@ def process_full_dataset(json_file_path="output/posts.json"):
 
     journeys_df = pd.DataFrame(journey_rows).sort_values(["journey_date", "train_number"]).reset_index(drop=True)
 
-    # Add Inbound Cascading Rake Lag Features
+    # Inbound Cascading Rake Lag Features
     lookup_delay = {(r.journey_date, r.train_number): r.destination_delay_min_imputed for r in journeys_df.itertuples()}
     g = journeys_df.groupby("train_number")["destination_delay_min_imputed"]
     journeys_df["prev_delay_same_train_min"] = g.shift(1)
@@ -667,7 +896,6 @@ def process_full_dataset(json_file_path="output/posts.json"):
 
         inbound = lookup_delay.get(key)
         if inbound is not None and not pd.isna(inbound):
-            # Explicit float conversion removes the Pylance Scalar/timedelta64 warning
             inbound_val = float(inbound)
             deficit = max(0.0, inbound_val - buffer_min)
             return inbound_val, deficit
@@ -682,7 +910,6 @@ def process_full_dataset(json_file_path="output/posts.json"):
     journeys_df.to_csv(journeys_file, index=False, encoding="utf-8-sig")
     print(f"[✓] TABLE 2 GENERATED: {journeys_file} ({len(journeys_df)} complete journeys)")
 
-    # Also export the master ML-ready dataset
     ml_file = OUT / "kalni_train_delay_ml_dataset.csv"
     journeys_df.to_csv(ml_file, index=False, encoding="utf-8-sig")
     print(f"[✓] MASTER ML DATASET EXPORTED: {ml_file}")
