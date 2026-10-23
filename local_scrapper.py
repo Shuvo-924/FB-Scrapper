@@ -1,10 +1,13 @@
+import argparse
+import datetime
 import json
 import os
 import re
 import socket
-import datetime
+import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
+from typing import Optional, Tuple
 
 import pandas as pd
 from playwright.sync_api import sync_playwright
@@ -15,9 +18,7 @@ SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "2500"))
 FETCH_DATES = os.getenv("FETCH_DATES", "1") == "1"
 STALL_LIMIT = int(os.getenv("STALL_LIMIT", "15"))
 
-# =========================================================================
-# DATE FILTER SETTINGS (Leave empty "" to disable)
-# =========================================================================
+# Date Filter Settings (Configurable via CLI arguments or environment variables)
 FILTER_YEAR = os.getenv("FILTER_YEAR", "2026")        # e.g. "2026", "2025"
 FILTER_MONTH = os.getenv("FILTER_MONTH", "August")    # e.g. "August", "8", "আগস্ট"
 
@@ -31,6 +32,23 @@ KEYWORDS = [k.strip().lower() for k in KEYWORDS_ENV.split(",") if k.strip()]
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 COLLECTED_POSTS = {}
+
+BN_TO_EN = str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789")
+
+MONTH_REGEX_MAP = {
+    1: [r"\bjan(?:uary)?\b", r"জানুয়া?রি"],
+    2: [r"\bfeb(?:ruary)?\b", r"ফেব্রুয়া?রি"],
+    3: [r"\bmar(?:ch)?\b", r"মার্চ"],
+    4: [r"\bapr(?:il)?\b", r"এপ্রিল"],
+    5: [r"\bmay\b", r"মে"],
+    6: [r"\bjun(?:e)?\b", r"জুন"],
+    7: [r"\bjul(?:y)?\b", r"জুলাই"],
+    8: [r"\baug(?:ust)?\b", r"আগস্ট"],
+    9: [r"\bsep(?:tember)?\b", r"সেপ্টেম্বর"],
+    10: [r"\boct(?:ober)?\b", r"অক্টোবর"],
+    11: [r"\bnov(?:ember)?\b", r"নভেম্বর"],
+    12: [r"\bdec(?:ember)?\b", r"ডিসেম্বর"],
+}
 
 MONTH_NAME_MAP = {
     "1": ["January", "Jan", "জানুয়ারি", "জানুয়ারি"],
@@ -47,8 +65,61 @@ MONTH_NAME_MAP = {
     "12": ["December", "Dec", "ডিসেম্বর"],
 }
 
+def parse_month_year(date_str: str) -> Tuple[Optional[int], Optional[int]]:
+    """Accurately parses (year, month) using word boundaries to prevent '31' matching '1'."""
+    if not date_str:
+        return None, None
+    s = str(date_str).translate(BN_TO_EN)
+
+    # 1. Extract 4-digit Year (2020-2030)
+    y_match = re.search(r"\b(202\d)\b", s)
+    year = int(y_match.group(1)) if y_match else None
+
+    # 2. Extract Month using strict word boundary regex
+    month = None
+    s_lower = s.lower()
+    for m_num, patterns in MONTH_REGEX_MAP.items():
+        for pat in patterns:
+            if re.search(pat, s_lower, re.I):
+                month = m_num
+                break
+        if month:
+            break
+
+    # 3. Fallback for numeric ISO date formats (e.g. '2026-07-31')
+    if not month:
+        iso_m = re.search(r"\b202\d-(\d{1,2})-\d{1,2}\b", s)
+        if iso_m:
+            month = int(iso_m.group(1))
+
+    return year, month
+
+
+def get_target_year_month(year_str: str, month_str: str) -> Tuple[Optional[int], Optional[int]]:
+    y = None
+    if year_str:
+        m = re.search(r"\b(202\d)\b", str(year_str).translate(BN_TO_EN))
+        if m:
+            y = int(m.group(1))
+
+    m_num = None
+    if month_str:
+        m_clean = str(month_str).lower().strip()
+        for num_k, patterns in MONTH_REGEX_MAP.items():
+            for pat in patterns:
+                if re.search(pat, m_clean, re.I):
+                    m_num = num_k
+                    break
+            if m_num:
+                break
+        if not m_num and m_clean.isdigit():
+            m_num = int(m_clean)
+
+    return y, m_num
+
+
 # =========================================================================
-# IN-PAGE JS
+# IN-PAGE JS HELPERS
 # =========================================================================
 HELPERS_JS = r"""
 const SEE_MORE = /^\s*(…|\.\.\.)?\s*(See more|আরও দেখুন)\s*$/i;
@@ -294,10 +365,6 @@ def apply_date_filter(page, year: str, month: str):
 # SHARE BUTTON LINK FETCH FALLBACK
 # =========================================================================
 def get_url_via_share_button(page, card_scope: str) -> str:
-    """
-    Clicks the Share button on the card, clicks 'Copy link' from the popup menu,
-    and intercepts the generated link via the clipboard hook.
-    """
     try:
         page.evaluate("""() => {
             window.__lastCopiedUrl = "";
@@ -317,7 +384,6 @@ def get_url_via_share_button(page, card_scope: str) -> str:
         if not card.is_visible(timeout=1000):
             return ""
 
-        # Exact SVG/sprite icons provided by user + text/aria-label fallbacks
         share_selectors = [
             'div[role="button"]:has(i[style*="-567px"])',
             'div[role="button"]:has(i[style*="-150px"])',
@@ -343,7 +409,6 @@ def get_url_via_share_button(page, card_scope: str) -> str:
         share_btn.click(timeout=1500)
         page.wait_for_timeout(600)
 
-        # Look for "Copy link" / "লিঙ্ক কপি করুন" option in the opened popover menu
         copy_selectors = [
             'div[role="menuitem"]:has-text("Copy link")',
             'div[role="menuitem"]:has-text("কপি লিঙ্ক")',
@@ -378,7 +443,7 @@ def get_url_via_share_button(page, card_scope: str) -> str:
         if copied_url and ("facebook.com" in copied_url or "fb.watch" in copied_url):
             return clean_facebook_url(copied_url)
 
-    except Exception as e:
+    except Exception:
         try:
             page.keyboard.press("Escape")
         except Exception:
@@ -444,7 +509,6 @@ def is_post_url(url: str) -> bool:
     p = urlparse(url)
     if any(b in p.path for b in ("/hashtag", "/browse/", "/watch/hashtag")):
         return False
-    # Added /share/ to recognize modern Facebook shortened share URLs
     return (any(m in p.path for m in ("/posts/", "/videos/", "/reel/", "/reels/", "/photo", "/permalink", "/share/"))
             or any(k in p.query for k in ("story_fbid", "fbid", "v=")))
 
@@ -583,9 +647,24 @@ def scrape_post_details_from_url(context, post_url: str, main_page) -> tuple[str
 
 
 # =========================================================================
-# MAIN
+# MAIN (WITH AUTOMATIC PREVIOUS-MONTH STOP)
 # =========================================================================
 def main():
+    parser = argparse.ArgumentParser(description="Facebook Page Timeline Scraper with Auto-Stop")
+    parser.add_argument("--year", type=str, default=FILTER_YEAR, help="Target year to scrape (e.g. 2026)")
+    parser.add_argument("--month", type=str, default=FILTER_MONTH, help="Target month to scrape (e.g. August)")
+    args = parser.parse_args()
+
+    filter_year = args.year
+    filter_month = args.month
+
+    # Resolve target year and month into numeric integers for boundary checks
+    target_y, target_m = get_target_year_month(filter_year, filter_month)
+    target_epoch_month = (target_y * 12 + target_m) if (target_y and target_m) else None
+
+    if target_epoch_month:
+        print(f"[+] Active Boundary Gate: Will automatically halt when feed crosses before {filter_month} {filter_year}.", flush=True)
+
     load_existing_data()
 
     snap_brave_bin = "/snap/bin/brave"
@@ -621,13 +700,19 @@ def main():
         page.wait_for_timeout(3000)
 
         # Apply Year & Month filters
-        if FILTER_YEAR or FILTER_MONTH:
-            apply_date_filter(page, FILTER_YEAR, FILTER_MONTH)
+        if filter_year or filter_month:
+            apply_date_filter(page, filter_year, filter_month)
 
         last_scroll_y, stalled = -1, 0
+        has_seen_target_month = False
+        consecutive_older_posts = 0
+        should_stop_scraping = False
 
         # Scroll & Scrape Loop
         for scroll_no in range(MAX_SCROLLS):
+            if should_stop_scraping:
+                break
+
             try:
                 page.evaluate(CLICK_FEED_JS)
                 page.wait_for_timeout(500)
@@ -665,22 +750,43 @@ def main():
                     if u and (not url or "/photo" in url):
                         url = u
 
-                # -------------------------------------------------------------
-                # SHARE BUTTON FALLBACK: If URL is still missing, Copy Link!
-                # -------------------------------------------------------------
+                # Share button fallback if URL is missing
                 if not url:
-                    print(f"    [!] No URL from DOM. Trying Share -> Copy link for card #{cid}...", flush=True)
                     copied_u = get_url_via_share_button(page, card_scope)
                     if copied_u:
                         url = copied_u
-                        print(f"    [✔] Retrieved URL via Share button: {url}", flush=True)
 
-                # If URL was found but date is still missing, fetch from dedicated page
+                # If URL found but date is missing, fetch from dedicated page
                 if FETCH_DATES and url and not exact_ts:
                     d, full_t = scrape_post_details_from_url(context, url, page)
                     exact_ts = d
                     if len(full_t) > len(text):
                         text = full_t
+
+                # =========================================================
+# =========================================================
+                # BOUNDARY GATE: CHECK IF REACHED PREVIOUS MONTH
+                # =========================================================
+                if exact_ts and target_epoch_month:
+                    post_y, post_m = parse_month_year(exact_ts)
+                    if post_y and post_m:
+                        post_epoch = post_y * 12 + post_m
+
+                        if post_epoch == target_epoch_month:
+                            has_seen_target_month = True
+                            consecutive_older_posts = 0
+                        elif post_epoch < target_epoch_month:
+                            consecutive_older_posts += 1
+                            # Only stop once we have actually scrolled through July
+                            # and hit 2 consecutive posts from June (or earlier)
+                            if has_seen_target_month and consecutive_older_posts >= 2:
+                                print(f"\n" + "=" * 70)
+                                print(f"🛑 [AUTO-STOP TRIGGERED] Reached previous month: {post_y}-{post_m:02d} ({exact_ts})")
+                                print(f"   Target {filter_month} {filter_year} complete. Exiting cleanly.")
+                                print("=" * 70 + "\n", flush=True)
+                                should_stop_scraping = True
+                                done()
+                                break
 
                 sig = url or (f"{exact_ts}|{text[:100]}" if exact_ts else text[:100])
                 if sig in COLLECTED_POSTS:
@@ -693,6 +799,9 @@ def main():
                 print(f"\n  [🎯 Matched #{len(COLLECTED_POSTS)}] {exact_ts or 'No Date'} | {len(text)} chars", flush=True)
                 print(f"  {text[:120].replace(chr(10), ' | ')}", flush=True)
                 print(f"  URL: {url or 'N/A'}\n", flush=True)
+
+            if should_stop_scraping:
+                break
 
             y = page.evaluate("() => window.scrollY")
             if y == last_scroll_y:
@@ -713,13 +822,13 @@ def main():
             page.wait_for_timeout(SCROLL_WAIT_MS)
 
             if (scroll_no + 1) % 3 == 0:
-                print(f"[Scroll {scroll_no + 1}/{MAX_SCROLLS}] Y={y}px | New cards: {len(items)} | Secured: {len(COLLECTED_POSTS)}", flush=True)
+                print(f"[Scroll {scroll_no + 1}/{MAX_SCROLLS}] Y={y}px | New cards: {len(items)} | Total: {len(COLLECTED_POSTS)}", flush=True)
 
         if browser:
             browser.close()
         else:
             context.close()
-        print(f"\n🎉 Done. Total posts: {len(COLLECTED_POSTS)}", flush=True)
+        print(f"\n🎉 Done. Target month completed. Total posts saved: {len(COLLECTED_POSTS)}", flush=True)
 
 
 if __name__ == "__main__":
