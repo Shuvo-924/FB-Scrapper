@@ -24,7 +24,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.5-flash-lite,gemini-3.8-flash,gemini-3.1-flash-lite").split(",")]
 BATCH_SIZE = 15
-SCHEMA_VERSION = "v3-ops"          # bump when the extraction schema/prompt changes -> old cache entries are ignored
+SCHEMA_VERSION = "v4-ops"          # bump when the extraction schema/prompt changes -> old cache entries are ignored
 
 ON_TIME_TOL_MIN = 15       # arrival delay above this => is_late = 1
 NEAR_STATION_MIN = 200     # a reported station within this many scheduled minutes is "close"
@@ -33,6 +33,8 @@ MIN_DELAY_MIN = -30        # earlier than this = misread
 MAX_DELAY_MIN = 420        # later than this = misread / wrong train
 OUTLIER_MIN = 150          # drop observations this far from the journey's median delay
 MIN_FLAG_COUNT = 3         # a train gets its own crossed_/overtaken_by_ column if it appears this often
+LOCO_MIN, LOCO_MAX = 2600, 3399   # plausible BR engine numbers; rejects years (2026), times, crowd counts (3000 জন)
+STRONG_LOCO_MIN = 3000     # engine number >= 3000 = strong. Lower numbers are NOT "weak": just standard
 
 OUT = Path("output")
 OUT.mkdir(exist_ok=True)
@@ -269,7 +271,6 @@ class PostExtraction(BaseModel):
     stated_delay_minutes: Optional[int] = None
     stated_delay_reference: Optional[str] = None   # from_origin | en_route
     locomotive_number: Optional[str] = None
-    engine_quality: Optional[str] = None  # weak | strong
     driver_name: Optional[str] = None
     crossings: Optional[List[Crossing]] = None
     overtaken_by: Optional[List[Overtake]] = None
@@ -278,7 +279,6 @@ class PostExtraction(BaseModel):
 
 REASONS = [
     "late_engine_or_rake",        # engine / rake not ready or connected late at the origin
-    "weak_engine",                # weak, slow or poorly performing engine
     "engine_failure",             # breakdown / electrical failure of Kalni's engine
     "crossing_wait",              # Kalni held for a crossing
     "overtaken_by_other_train",   # another train dispatched or passed ahead of Kalni
@@ -309,8 +309,7 @@ GLOSSARY: লন্ডন/লন্ডনগামী = Sylhet; কমলাপ�
 সিলেট টু ঢাকা / ঢাকা অভিমুখী / ঢাকাগামী = 774.
 
 RULES
-1. is_relevant=true only if the post gives the train's time/position, a quantified delay, the engine (number or
-   quality), the driver, a crossing, an overtaking/priority event, or a cause of delay. Greetings, photo credits,
+1. is_relevant=true only if the post gives the train's time/position, a quantified delay, the engine number, the driver, a crossing, an overtaking/priority event, or a cause of delay. Greetings, photo credits,
    praise, general rants with no facts, or posts about other trains only -> false. A rant that still states a
    time/position of Kalni is relevant: extract only those facts.
 2. observations: one per station event. time_text = the clock time copied EXACTLY as written (e.g. "০৪:২০", "৭.৫৮",
@@ -320,11 +319,15 @@ RULES
 5. stated_delay_minutes only if the post quantifies a delay ("এক ঘন্টা"=60, "প্রায় ৪ ঘণ্টা"=240, "৩ ঘন্টার অধিক"=180).
    stated_delay_reference = "from_origin" if the delay is measured from the departure station
    ("ঢাকা থেকে এক ঘন্টা বিলম্ব"), else "en_route".
-6. locomotive_number: digits only, English digits (e.g. "2921"), for Kalni's own engine. If two, join with ";".
-   engine_quality: "weak" if the engine is called weak/slow/bad (দুর্বল, ধ্বজভঙ্গ, মহা দুর্বল, দুর্বল গতি, খারাপ),
-   "strong" if called strong/good/fast (শক্তিশালী, মারদাঙ্গা, ভালো, সেরা, আগুন পারফরমেন্স); else null.
+6. locomotive_number: the 4-digit number (English digits) of KALNI's own engine, ONLY when the post ties it to Kalni:
+   written like "2936/774", "773/2936", "২৯০১ & ৭৭৪ কালনী", or next to ইঞ্জিন/লোকো in a post about Kalni.
+   The digits must appear in the post exactly. NEVER take: a number that belongs to another train
+   ("3022 ইঞ্জিনের পারাবত", "2709/781"), a year (2026), a clock time, a count of people, a coach number.
+   If a post lists engines for both Kalni trains, return only the one for this post's train, null if unclear.
+   Take time to reason if necessary. Do NOT judge whether an engine is strong or weak: opinions about engines are not extracted.
 7. driver_name: the loco master / driver of Kalni as written (এল এম, চালক, "চালকের দায়িত্বে আছেন"). Name only,
-   without honorifics (ভাই, নানাভাই, প্রিয়). Null if not named.
+   without honorifics (ভাই, নানাভাই, প্রিয়). Null if not named. A name after 📸 / ছবি / ভিডিও / ©
+   is a PHOTO CREDIT, never the driver.
 8. crossings: each crossing with another train: other_train as written (পারাবত, উদয়ন, জয়ন্তিকা, উপবন, সুবর্ণা, উপকূল,
    ব্রহ্মপুত্র, তুরাগ, চট্টলা, or a train number), station, wait_minutes if stated.
    kalni_waited=true if Kalni was the one held (কালনী বসা / বসে আছে / লুপে), false if the other train waited, null if unclear.
@@ -482,68 +485,95 @@ def _norm_event(c):
     return {"train": canon_train(c.get("other_train")), "station": canonical_station(st_raw) or st_raw or None,
             "wait": c.get("wait_minutes"), "kalni_waited": c.get("kalni_waited")}
 
-def extract_kalni_locomotive_from_text(raw_text: str, target_train: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Deterministically extracts locomotive assigned specifically to Kalni (773 or 774).
-    Handles BD rail shorthand like:
-      - '2936/774*2709/781' -> Returns ('774', '2936') [Strictly ignores 2709 on 781]
-      - '2908/773'          -> Returns ('773', '2908')
-      - '৭৭৩ ... ইঞ্জিন ২৯২১' -> Returns ('773', '2921')
-    """
+LOCO_NUM = r"(2[6-9]\d{2}|3[0-3]\d{2})"      # BR engine numbers; a year (20xx) or a time can never match
+KALNI_NUM = r"(77[34])"
+# separators that really bind an engine to a train: "2936/774", "2901 & 774", "2901 ও 774", "774 - 2936"
+# ('*' is deliberately NOT one: in "2936/774*2709/781" the 2709 belongs to 781)
+_SEP = r"\s*(?:[/&+,\-–—]|এবং|ও|আর|নং|নম্বর)?\s*"
+
+_OTHER_TRAIN_TOKENS = [_nm(a.translate(BN_TO_EN)) for al in TRAIN_ALIASES.values() for a in al]
+
+
+def extract_kalni_locos_from_text(raw_text: str) -> dict:
+    """{'774': '2936', '773': '2908'}: only engines written right next to a Kalni train number (or ইঞ্জিন/লোকো
+    on the same line). Never guesses; anything else is left to the (checked) Gemini fallback."""
     if not raw_text:
-        return None, None
-    t = raw_text.translate(BN_TO_EN)
-    train_pat = target_train if target_train in ("773", "774") else "(773|774)"
-
-    # 1. Shorthand: [4-digit Loco]/[773 or 774] e.g. 2936/774
-    m1 = re.search(rf"\b([23]\d{{3}})\s*/\s*{train_pat}\b", t)
-    if m1:
-        tr = target_train if target_train else m1.group(2)
-        return tr, m1.group(1)
-
-    # 2. Reverse Shorthand: [773 or 774]/[4-digit Loco] e.g. 774/2936
-    m2 = re.search(rf"\b{train_pat}\s*/\s*([23]\d{{3}})\b", t)
-    if m2:
-        tr = target_train if target_train else m2.group(1)
-        return tr, m2.group(2)
-
-    # 3. Explicit sentence structure: Train + Engine
-    trains_to_check = [target_train] if target_train in ("773", "774") else ["773", "774"]
-    for tr in trains_to_check:
-        if tr in t:
-            m3 = re.search(rf"{tr}.*?(?:ইঞ্জিন|লোকো|loco|engine|with|উইথ)?\s*[:=\-]?\s*([23]\d{{3}})", t, re.I | re.S)
-            if m3:
-                return tr, m3.group(1)
-
-    return None, None
+        return {}
+    t = unicodedata.normalize("NFC", raw_text).translate(BN_TO_EN)
+    out = {}
+    # engine then train:  2936/774 | 2901 & 774
+    for m in re.finditer(rf"(?<!\d){LOCO_NUM}(?!\d){_SEP}{KALNI_NUM}(?!\d)", t):
+        out.setdefault(m.group(2), m.group(1))
+    # train then engine:  774/2936 | 773 - 2908   (not when that engine is itself tied to another train: "774 & 2709/781")
+    for m in re.finditer(rf"(?<!\d){KALNI_NUM}(?!\d){_SEP}{LOCO_NUM}(?!\d)(?!\s*/\s*\d{{2,3}})", t):
+        out.setdefault(m.group(1), m.group(2))
+    # keyword on the same line: "774 কালনী ইঞ্জিন ২৯০১" / "773 loco: 2921"
+    for tr in ("773", "774"):
+        if tr not in out:
+            m = re.search(rf"(?<!\d){tr}(?!\d)[^\n\d]{{0,25}}?(?:ইঞ্জিন|লোকো|loco|engine)[^\d\n]{{0,8}}{LOCO_NUM}(?!\d)", t, re.I)
+            if m:
+                out[tr] = m.group(1)
+    return out
 
 
-def make_meta(ex, post_dt, raw_text: str = "", target_train: Optional[str] = None):
-    # 1. Deterministic regex check from raw post text for this specific train
-    det_tr, det_loco = extract_kalni_locomotive_from_text(raw_text, target_train)
+def _tied_to_other_train(t: str, num: str) -> bool:
+    """True if EVERY occurrence of `num` in the text sits next to another train (name or number)."""
+    occ = [m for m in re.finditer(rf"(?<!\d){num}(?!\d)", t)]
+    if not occ:
+        return True
+    for m in occ:
+        before, after = t[max(0, m.start() - 22):m.start()], t[m.end():m.end() + 22]
+        slash_other = re.match(r"\s*/\s*(\d{2,3})(?!\d)", after) or re.search(r"(?<!\d)(\d{2,3})\s*/\s*$", before)
+        if slash_other and slash_other.group(1) not in ("773", "774"):
+            continue
+        near = _nm(before + " " + after)
+        if any(tok and tok in near for tok in _OTHER_TRAIN_TOKENS):
+            continue
+        return False                       # this occurrence is not tied to another train
+    return True
 
-    if det_loco:
-        locos = [det_loco]
-    else:
-        # Fallback to Gemini extraction, strictly filtering to valid 4-digit BR engines
-        locos = re.findall(r"\b(26\d{2}|27\d{2}|29\d{2}|30\d{2}|31\d{2}|32\d{2}|33\d{2})\b",
-                           str(ex.get("locomotive_number") or "").translate(BN_TO_EN))
 
-    driver = canon_driver(ex.get("driver_name"))
-    q = (ex.get("engine_quality") or "").strip().lower()
-    q = q if q in ("weak", "strong") else None
+def gemini_loco(ex, raw_text):
+    """Gemini's engine number is accepted only if it is in range, literally in the post, and not another train's."""
+    t = unicodedata.normalize("NFC", raw_text or "").translate(BN_TO_EN)
+    nums = {n for n in re.findall(rf"(?<!\d){LOCO_NUM}(?!\d)", str(ex.get("locomotive_number") or "").translate(BN_TO_EN))}
+    ok = [n for n in nums if not _tied_to_other_train(t, n)]
+    return ok[0] if len(ok) == 1 else None
+
+
+CREDIT_LINE_RE = re.compile(r"(?mi)^[^\n]*(?:📸|©|ছবি\s*[-:–]|ভিডিও\s*[-:–]|photo\s*[-:–]|video\s*[-:–]|credit)[^\n]*$")
+
+
+def is_photo_credit(driver_raw, text) -> bool:
+    ct = _nm(" ".join(m.group(0) for m in CREDIT_LINE_RE.finditer(text or "")))
+    toks = [w for w in (canon_driver(driver_raw) or "").split() if len(w) > 2]
+    return bool(ct and toks and all(_nm(w) in ct for w in toks))
+
+
+def make_meta(ex, post_dt, raw_text: str = "", target_train: Optional[str] = None, url: str = ""):
+    explicit = extract_kalni_locos_from_text(raw_text)
+    loco, method = None, None
+    if target_train in explicit:
+        loco, method = explicit[target_train], "text_explicit"
+    elif not explicit:                                  # no engine tied to a Kalni train: use Gemini, but checked
+        loco = gemini_loco(ex, raw_text)
+        method = "text_inferred" if loco else None
+
+    drv_raw = ex.get("driver_name")
+    driver = None if (drv_raw and is_photo_credit(drv_raw, raw_text)) else canon_driver(drv_raw)
     crossings = [e for e in (_norm_event(c) for c in ex.get("crossings") or []) if e["train"] or e["station"]]
     overtakes = [e for e in (_norm_event(c) for c in ex.get("overtaken_by") or []) if e["train"] or e["station"]]
     reasons = [r for r in ex.get("delay_reasons") or [] if r in REASONS]
     stated = ex.get("stated_delay_minutes")
 
-    if not any([locos, driver, q, crossings, overtakes, reasons, stated is not None]):
+    if not any([loco, driver, crossings, overtakes, reasons, stated is not None]):
         return None
 
     return {
-        "post_dt": post_dt, "locos": locos, "driver": driver, "quality": q,
+        "post_dt": post_dt, "locos": [loco] if loco else [], "loco_method": method, "driver": driver,
         "crossings": crossings, "overtakes": overtakes, "reasons": reasons,
-        "stated": stated, "stated_ref": ex.get("stated_delay_reference")
+        "stated": stated, "stated_ref": ex.get("stated_delay_reference"),
+        "url": url, "snippet": " ".join((raw_text or "").split())[:90],
     }
 
 
@@ -586,39 +616,38 @@ def build_events(posts, extractions):
             })
             keys.append((train, jd))
 
-        # --- 2. Directional Train Attribution for Metadata ---
+        # --- 2. Which Kalni train(s) does the post talk about? ---
         txt_norm = raw_text.translate(BN_TO_EN)
+        nm = _nm(raw_text)                      # spaces removed: "ঢাকা গামী" == "ঢাকাগামী"
         trains_in_post = set()
-
-        if re.search(r"\b773\b", txt_norm) or "ঢাকা টু সিলেট" in raw_text or "সিলেটগামী" in raw_text or "লন্ডনগামী" in raw_text:
+        if re.search(r"(?<!\d)773(?!\d)", txt_norm) or any(x in nm for x in ("ঢাকাটুসিলেট", "সিলেটগামী", "সিলেটঅভিমুখী", "লন্ডনগামী", "সিলেটেরউদ্দেশ্যে")):
             trains_in_post.add("773")
-        if re.search(r"\b774\b", txt_norm) or "সিলেট টু ঢাকা" in raw_text or "ঢাকাগামী" in raw_text:
+        if re.search(r"(?<!\d)774(?!\d)", txt_norm) or any(x in nm for x in ("সিলেটটুঢাকা", "ঢাকাগামী", "ঢাকাঅভিমুখী", "ঢাকামুখী", "ঢাকারউদ্দেশ্যে")):
             trains_in_post.add("774")
 
-        # If text doesn't explicitly name a train, use the observation keys
-        if not trains_in_post and keys:
+        if not trains_in_post and keys:         # no explicit train: use where the timed events landed
             trains_in_post.add(Counter([k[0] for k in keys]).most_common(1)[0][0])
-
-        # Final fallback: use hint or time-of-day heuristic
-        if not trains_in_post:
+        if not trains_in_post:                  # last resort: hint or time of day
             fallback_t = hint_t or DIR_TO_TRAIN.get(hint_d)
             if not fallback_t:
                 mins = post_dt.hour * 60 + post_dt.minute
                 fallback_t = "774" if 360 <= mins < 810 else "773"
             trains_in_post.add(fallback_t)
 
-        # --- 3. Attach Metadata Strictly Per Train ---
+        # --- 3. Attach metadata strictly per train ---
         for tr in trains_in_post:
-            meta = make_meta(ex, post_dt, raw_text=raw_text, target_train=tr)
+            meta = make_meta(ex, post_dt, raw_text=raw_text, target_train=tr, url=p.get("url", ""))
             if meta is None:
                 continue
-
             matching_keys = [k for k in keys if k[0] == tr]
+            if len(trains_in_post) > 1 and not matching_keys:
+                # post names both trains and nothing places it: keep ONLY the engine tied to this train
+                meta = dict(meta, driver=None, crossings=[], overtakes=[], reasons=[], stated=None)
+                if not meta["locos"]:
+                    continue
             if matching_keys:
-                target_key = Counter(matching_keys).most_common(1)[0][0]
-                meta_by_j[target_key].append(meta)
+                meta_by_j[Counter(matching_keys).most_common(1)[0][0]].append(meta)
             else:
-                # If post had engine/driver facts but no station events, queue for span matching
                 pending.append((meta, tr, hint_d))
 
     # --- 4. Resolve Untimed Posts within Matching Journey Window ---
@@ -743,6 +772,18 @@ def resolve_departure(train, jd, obs, metas, rate):
     return {"delay": delay, "source": src, "dt": base + timedelta(minutes=sched_dep + delay)}
 
 
+def pick_loco(ms):
+    """Engine with the most evidence (explicit '2936/774' counts 3, an inferred mention 1); ties -> earliest mention."""
+    w, first = Counter(), {}
+    for m in ms:
+        for l in m["locos"]:
+            w[l] += 3 if m.get("loco_method") == "text_explicit" else 1
+            first[l] = min(first.get(l, m["post_dt"]), m["post_dt"])
+    if not w:
+        return None
+    return max(w, key=lambda l: (w[l], -first[l].timestamp()))
+
+
 def agg_meta(metas, dep_dt, origin):
     uniq = lambda xs: list(dict.fromkeys(x for x in xs if x))
     cutoff = dep_dt + timedelta(minutes=10) if dep_dt else None
@@ -752,15 +793,14 @@ def agg_meta(metas, dep_dt, origin):
         vals = [v for m in ms for v in getter(m)]
         return Counter(vals).most_common(1)[0][0] if vals else None
 
-    def quality(ms):
-        w = sum(m["quality"] == "weak" for m in ms)
-        s = sum(m["quality"] == "strong" for m in ms)
-        return None if not (w or s) else ("weak" if w > s else "strong" if s > w else "mixed")
-
-    g_loco, g_drv = (lambda m: m["locos"]), (lambda m: [m["driver"]] if m["driver"] else [])
-    loco_pre, loco_any = top(pre, g_loco), top(metas, g_loco)
+    g_drv = lambda m: [m["driver"]] if m["driver"] else []
+    loco_pre, loco_any = pick_loco(pre), pick_loco(metas)
     drv_pre, drv_any = top(pre, g_drv), top(metas, g_drv)
     loco_primary, driver_primary = loco_pre or loco_any, drv_pre or drv_any
+    explicit = uniq(l for m in metas if m.get("loco_method") == "text_explicit" for l in m["locos"])
+    loco_method = None
+    if loco_primary:
+        loco_method = "text_explicit" if loco_primary in explicit else "text_inferred"
 
     crossings = _dedup([c for m in metas for c in m["crossings"]])
     overtakes = _dedup([c for m in metas for c in m["overtakes"]])
@@ -770,19 +810,15 @@ def agg_meta(metas, dep_dt, origin):
         reasons.add("crossing_wait")
     if overtakes:
         reasons.add("overtaken_by_other_train")
-    if quality(metas) == "weak":
-        reasons.add("weak_engine")
     wait_total = sum(c["wait"] or 0 for c in crossings if c["kalni_waited"] is not False)
     ot_wait = sum(c["wait"] or 0 for c in overtakes)
 
     return {
-        # engine
-        "loco_primary": loco_primary, "loco_series": f"{loco_primary[:2]}xx" if loco_primary and len(loco_primary) == 4 else None,
-        "loco_type": LOCO_TYPE_MAP.get(loco_primary) if loco_primary else None,
-        "locomotive_numbers": "; ".join(uniq(l for m in metas for l in m["locos"])) or None,
-        "loco_changed": int(len(set(l for m in metas for l in m["locos"])) > 1),
-        "engine_quality": quality(metas),
-        "loco_pre_departure": loco_pre, "engine_quality_pre_departure": quality(pre),
+        # engine (strength / series are derived from the number later, never from opinions in posts)
+        "loco_primary": loco_primary, "loco_method": loco_method,
+        "locomotive_numbers": "; ".join(explicit or ([loco_primary] if loco_primary else [])) or None,
+        "loco_changed": int(len(explicit) > 1),      # only when 2+ numbers are each explicitly tied to this train
+        "loco_pre_departure": loco_pre,
         # crew
         "driver_primary": driver_primary, "driver_names": "; ".join(uniq(m["driver"] for m in metas)) or None,
         "driver_pre_departure": drv_pre,
@@ -951,6 +987,8 @@ def merge_image_locos(df):
         if r is None or df.at[i, "loco_source"] == "text":
             continue
         n = r.loco_from_image
+        if not (n.isdigit() and LOCO_MIN <= int(n) <= LOCO_MAX):      # a year / sign read by mistake
+            continue
         df.at[i, "loco_primary"], df.at[i, "locomotive_numbers"] = n, n
         df.at[i, "loco_series"] = f"{n[:2]}xx" if len(n) == 4 else None
         df.at[i, "loco_source"] = "image"
@@ -959,6 +997,16 @@ def merge_image_locos(df):
         df.at[i, "loco_image_votes"], df.at[i, "loco_image_score"] = int(r.loco_image_votes or 0), float(r.loco_image_score or 0)
         n_filled += 1
     print(f"[+] engine numbers filled from images: {n_filled}", flush=True)
+    return df
+
+
+def add_engine_features(df):
+    """Everything about the engine comes from its NUMBER. No number -> all of these stay empty (never 0 / 'standard')."""
+    nums = [int(v) if isinstance(v, str) and v.isdigit() else None for v in df["loco_primary"]]
+    df["loco_series"] = [f"{str(n)[:2]}xx" if n else None for n in nums]
+    df["loco_strength"] = [None if n is None else ("strong" if n >= STRONG_LOCO_MIN else "standard") for n in nums]
+    df["is_strong_engine"] = pd.array([None if n is None else int(n >= STRONG_LOCO_MIN) for n in nums], dtype="Int64")
+    df["loco_type"] = [LOCO_TYPE_MAP.get(v) if isinstance(v, str) else None for v in df["loco_primary"]]
     return df
 
 
@@ -1015,6 +1063,7 @@ def process_full_dataset(json_file_path="output/posts.json"):
         panel += panel_rows(t, jd, o)
     df = pd.DataFrame(rows).sort_values(["journey_date", "train_number"]).reset_index(drop=True)
     df = merge_image_locos(df)
+    df = add_engine_features(df)
 
     # ---- lags and rake cascade (what was known before the journey) ----
     df = df.sort_values(["train_number", "journey_date"])
@@ -1047,6 +1096,12 @@ def process_full_dataset(json_file_path="output/posts.json"):
     df.to_csv(OUT / "kalni_journeys_all.csv", index=False, encoding="utf-8-sig")
     ml = df.dropna(subset=["is_late"])
     ml.to_csv(OUT / "kalni_train_delay_ml_dataset.csv", index=False, encoding="utf-8-sig")
+    chosen = {(r.journey_date, r.train_number): r.loco_primary for r in df.itertuples()}
+    ev = [{"journey_date": jd.isoformat(), "train_number": t, "number": l, "method": m.get("loco_method"),
+           "chosen": int(chosen.get((jd.isoformat(), t)) == l), "post_time": m["post_dt"].strftime("%Y-%m-%d %H:%M"),
+           "post_url": m.get("url", ""), "post_text": m.get("snippet", "")}
+          for (t, jd), ms in meta_by_j.items() for m in ms for l in m["locos"]]
+    pd.DataFrame(ev).to_csv(OUT / "locomotive_evidence.csv", index=False, encoding="utf-8-sig")
     pd.DataFrame(panel).to_csv(OUT / "station_delays.csv", index=False, encoding="utf-8-sig")
     (OUT / "column_guide.json").write_text(json.dumps({c: stage_of(c) for c in df.columns}, indent=1), encoding="utf-8")
 

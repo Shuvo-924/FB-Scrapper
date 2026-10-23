@@ -5,3 +5,6 @@ storage_state.json
 facebook_profile
 auth_temp
 loco_dataset
+runs
+weights
+yolov8n.pt
